@@ -12,7 +12,7 @@ const STEEL_LIGHT := Color("8a90a3")
 const STEEL_DARK := Color("33353f")
 const WOOD := Color("6b3d22")
 
-const VERSION_TEXT := "V0.1 - PASSO 1"
+const VERSION_TEXT := "V0.2 - PASSO 2"
 
 var embers: Array = []        # braci che salgono lente
 var sparks: Array = []        # scintille del colpo di martello
@@ -20,6 +20,7 @@ var time := 0.0
 var strike := 0.0             # 1 appena colpito, scende a 0
 var shake := 0.0
 var hits := 0
+var starting := false
 
 func _ready() -> void:
 	randomize()
@@ -54,8 +55,11 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	var pressed: bool = event is InputEventScreenTouch and event.pressed
-	if pressed:
+	if pressed and not starting:
 		_hit_anvil()
+		starting = true
+		# un attimo per vedere le scintille, poi si entra nella stanza
+		get_tree().create_timer(0.45).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/game.tscn"))
 
 func _hit_anvil() -> void:
 	hits += 1
@@ -118,7 +122,7 @@ func _draw() -> void:
 
 	# Invito a toccare (lampeggia)
 	if fmod(time, 1.2) < 0.8:
-		PixelFont.draw_centered(self, "TOCCA PER FORGIARE", size.x / 2.0, floorf(size.y * 0.80), 2, Color.WHITE, DARK)
+		PixelFont.draw_centered(self, "TOCCA PER INIZIARE", size.x / 2.0, floorf(size.y * 0.80), 2, Color.WHITE, DARK)
 	if hits > 0:
 		PixelFont.draw_centered(self, "COLPI: %d" % hits, size.x / 2.0, floorf(size.y * 0.80) + 24, 1, YELLOW)
 
