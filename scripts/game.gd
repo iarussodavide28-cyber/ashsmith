@@ -2,7 +2,7 @@ extends Node2D
 ## La partita: un capitolo di 12 stanze con forgia, nemici, mini-boss e boss.
 ## Tutto è disegnato in pixel art col codice (segnaposto finché non arriva la grafica vera).
 
-enum St { PLAY, CLEAR, FORGE, PAUSE, DEAD, WIN }
+enum St { PLAY, CLEAR, FORGE, PAUSE, DEAD, WIN, LEVEL }
 
 # ---------- Aspetto ----------
 const FLOOR_A := Color("2b2024")
@@ -20,10 +20,10 @@ const TILE := 15
 const WALL_SIZE := 8
 const TOP_WALL := 24
 const ROCK := 26.0
-const HUD_H := 30.0
+const HUD_H := 36.0
 const BAR_H := 52.0
 const HERO_SIZE := 19
-const HERO_SPEED := 95.0
+const HERO_SPEED := 100.0
 const ACCEL := 900.0
 const FRICTION := 1100.0
 const JOY_RADIUS := 28.0
@@ -95,6 +95,25 @@ var forge_rects := {}
 var end_info := {}
 var ui_rects := {}
 
+# livelli e abilità della partita (come negli action roguelite)
+var xp := 0
+var lvl := 1
+var skills := {}
+var level_choices: Array = []
+var pending_lv := 0
+var level_ret := St.PLAY
+var lvl_t := 0.0
+# sensazione dei colpi
+var hitstop := 0.0
+var volley_q: Array = []
+var rings: Array = []
+var aim_target = null
+var fade_t := 0.0
+var hurt_t := 0.0
+var spirit_t := 0.0
+var orb_ang := 0.0
+var last_dir := Vector2.UP
+
 var autotest := false        # prova automatica (solo per i test, non nel gioco)
 var auto_target = null
 var auto_forged := false
@@ -132,6 +151,12 @@ func _debug_params() -> void:
 			enemies.clear()
 			waves = []
 			_room_cleared()
+		elif kv[0] == "levelup":
+			pending_lv = int(kv[1])
+		elif kv[0] == "skills":
+			for k in kv[1].split(","):
+				if Skills.LIST.has(k):
+					skills[k] = _sk(k) + 1
 		elif kv[0] == "forge" and not anvil.is_empty():
 			_open_forge()
 
@@ -267,18 +292,18 @@ func _spawn_enemy(k: String, p: Vector2) -> Dictionary:
 		"burn": 0.0, "burn_dps": 0.0, "slow": 0.0, "slow_amt": 0.0, "freeze": 0.0, "ice_hits": 0,
 		"pois": 0, "pois_t": 0.0, "pois_dps": 0.0, "t": randf_range(1.2, 2.2), "st": "move",
 		"aim": 0.0, "revived": false, "dead_t": 0.0, "patch_t": 0.0, "inv": 0.0, "tick": 0.0,
-		"boss": false, "weak_known": false, "phase": 1, "summon_t": 6.0,
+		"boss": false, "weak_known": false, "phase": 1, "summon_t": 6.0, "kb": Vector2.ZERO, "orb_cd": 0.0,
 	}
 	if k == "miniboss":
-		e.merge({"fam": "golem", "hp": 760.0, "speed": 18.0, "size": 40, "dmg": 26, "sparks": 40, "kind": "slammer", "boss": true, "name": "GOLEM ANTICO"}, true)
+		e.merge({"fam": "golem", "hp": 950.0, "speed": 18.0, "size": 40, "dmg": 26, "sparks": 40, "kind": "slammer", "boss": true, "name": "GOLEM ANTICO"}, true)
 		e.weak_known = true
 	elif k == "boss":
-		e.merge({"fam": "boss", "hp": 1500.0, "speed": 24.0, "size": 46, "dmg": 18, "sparks": 0, "kind": "boss", "boss": true, "name": "SIGNORE DELLA CENERE"}, true)
+		e.merge({"fam": "boss", "hp": 2000.0, "speed": 24.0, "size": 46, "dmg": 18, "sparks": 0, "kind": "boss", "boss": true, "name": "SIGNORE DELLA CENERE"}, true)
 		e.spawn = 1.4
 	else:
 		var d: Dictionary = Data.ENEMIES[k]
 		e.merge(d.duplicate(), true)
-		e.hp = d.hp * (1.0 + 0.07 * (room_n - 1))
+		e.hp = d.hp * (1.0 + 0.1 * (room_n - 1))
 	e.max = e.hp
 	enemies.append(e)
 	return e
@@ -300,7 +325,7 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
 		if t.pressed:
-			if state == St.FORGE or state == St.PAUSE or state == St.DEAD or state == St.WIN:
+			if state == St.FORGE or state == St.PAUSE or state == St.DEAD or state == St.WIN or state == St.LEVEL:
 				_ui_tap(t.position)
 				return
 			if _pause_rect().grow(6).has_point(t.position):
@@ -340,8 +365,17 @@ func _process(delta: float) -> void:
 	time += dt
 	shake = maxf(0.0, shake - dt * 8.0)
 	banner_t -= dt
+	fade_t = maxf(0.0, fade_t - dt)
+	hurt_t = maxf(0.0, hurt_t - dt * 2.5)
 	if autotest:
 		_autotest_step()
+	if hitstop > 0.0:
+		# piccolo fermo immagine quando un colpo va a segno forte
+		hitstop -= delta
+		queue_redraw()
+		return
+	if state == St.LEVEL:
+		lvl_t += dt
 	if state == St.PLAY or state == St.CLEAR:
 		_update_play(dt)
 	elif state == St.DEAD or state == St.WIN:
@@ -366,6 +400,8 @@ func _update_play(dt: float) -> void:
 		win_delay -= dt
 		if win_delay <= 0.0:
 			_end_run(true)
+	if pending_lv > 0 and win_delay < 0.0 and (state == St.PLAY or state == St.CLEAR):
+		_open_level()
 
 func _update_hero(dt: float) -> void:
 	var target := Vector2.ZERO
@@ -377,8 +413,8 @@ func _update_hero(dt: float) -> void:
 	if touch_index != -1:
 		var off := joy_current - joy_origin
 		if off.length() > 3.0:
-			var strength := clampf((off.length() - 3.0) / (JOY_RADIUS - 3.0), 0.0, 1.0)
-			target = off.normalized() * HERO_SPEED * (1.0 + bonus.speed_pct) * maxf(strength, 0.35)
+			var strength := clampf((off.length() - 3.0) / 9.0, 0.0, 1.0)
+			target = off.normalized() * HERO_SPEED * (1.0 + bonus.speed_pct + 0.12 * _sk("speed")) * maxf(strength, 0.4)
 			facing = off.normalized()
 	if target != Vector2.ZERO:
 		hero_vel = hero_vel.move_toward(target, ACCEL * dt)
@@ -439,30 +475,111 @@ func _nearest_visible(from: Vector2) -> Variant:
 			best = e
 	return best if best != null else any
 
+func _sk(k: String) -> int:
+	return int(skills.get(k, 0))
+
+func _atk_mult() -> float:
+	return (1.0 + bonus.weapon_atk[cur_w]) * (1.0 + 0.18 * _sk("atk"))
+
 func _update_attack(dt: float) -> void:
 	atk_t = maxf(0.0, atk_t - dt)
+	aim_target = _nearest_visible(hero_pos)
+	_update_helpers(dt)
+	# raffiche già partite (Colpo doppio)
+	if not volley_q.is_empty():
+		for v in volley_q:
+			v.t -= dt
+			if v.t <= 0.0:
+				var d: Vector2 = last_dir
+				if aim_target != null:
+					d = (aim_target.pos - hero_pos).normalized()
+				_fire_volley(d, 0.85)
+		volley_q = volley_q.filter(func(v): return v.t > 0.0)
 	var still := touch_index == -1 and auto_target == null and hero_vel.length() < 10.0
 	if not still or atk_t > 0.0:
 		return
-	var tg = _nearest_visible(hero_pos)
+	var tg = aim_target
 	if tg == null:
 		return
-	var wd := _wdata()
 	var dir: Vector2 = (tg.pos - hero_pos).normalized()
 	facing = dir
-	atk_t = wd.rate / (1.0 + bonus.aspd_pct)
+	last_dir = dir
+	atk_t = _wdata().rate / (1.0 + bonus.aspd_pct + 0.2 * _sk("aspd"))
+	_fire_volley(dir, 1.0)
+	for i in _sk("multi"):
+		volley_q.append({"t": 0.12 * (i + 1)})
+
+func _fire_volley(dir: Vector2, mult: float) -> void:
+	var wd := _wdata()
 	var w := _w()
 	var col := _shot_color(w)
-	var dmg: float = wd.dmg * (1.0 + bonus.weapon_atk[cur_w])
-	var angles: Array = [0.0] if not bonus.double_shot[cur_w] else [-0.14, 0.14]
-	for da in angles:
-		var d2 := dir.rotated(da)
-		var crit: bool = randf() < bonus.crit
+	var dmg: float = wd.dmg * _atk_mult() * mult
+	var dirs: Array = []      # [direzione, spostamento laterale]
+	var base_angles: Array = [0.0] if not bonus.double_shot[cur_w] else [-0.14, 0.14]
+	var nf := 1 + _sk("front")
+	for da in base_angles:
+		for i in nf:
+			dirs.append([dir.rotated(da), (i - (nf - 1) / 2.0) * 7.0])
+	for i in _sk("diag"):
+		var a: float = [0.75, 0.4][i]
+		dirs.append([dir.rotated(a), 0.0])
+		dirs.append([dir.rotated(-a), 0.0])
+	if _sk("side") > 0:
+		dirs.append([dir.rotated(PI / 2), 0.0])
+		dirs.append([dir.rotated(-PI / 2), 0.0])
+	if _sk("back") > 0:
+		dirs.append([-dir, 0.0])
+	var crit_ch: float = bonus.crit + 0.1 * _sk("crit")
+	for d in dirs:
+		var d2: Vector2 = d[0]
+		var crit: bool = randf() < crit_ch
 		shots.append({
-			"pos": hero_pos + d2 * 6, "vel": d2 * wd.speed, "life": wd.range / wd.speed,
+			"pos": hero_pos + d2 * 6 + d2.orthogonal() * d[1], "vel": d2 * wd.speed, "life": wd.range / wd.speed,
 			"dmg": dmg * (2.0 if crit else 1.0), "crit": crit, "w": w.key, "slots": w.slots.duplicate(), "size": wd.size,
-			"area": wd.area, "hit": [], "col": col,
+			"area": wd.area, "hit": [], "col": col, "pierce": _sk("pierce") > 0, "bounce": 1 if _sk("bounce") > 0 else 0,
+			"chain": _sk("chain"), "kb": {"sword": 150.0, "bow": 70.0, "staff": 55.0}.get(w.key, 60.0),
 		})
+	# lampo sulla punta dell'arma
+	for i in 4:
+		parts.append({"pos": hero_pos + dir * 11, "vel": dir.rotated(randf_range(-0.8, 0.8)) * randf_range(40, 90), "life": 0.15, "max": 0.15, "col": col.lightened(0.4), "size": 1})
+
+## Martelli rotanti e fuocherelli
+func _update_helpers(dt: float) -> void:
+	orb_ang += dt * 3.6
+	var n := _orbit_count()
+	if n > 0:
+		var dmg: float = 0.6 * _wdata().dmg * _atk_mult()
+		for i in n:
+			var p := _orbit_pos(i, n)
+			for e in enemies:
+				if e.spawn > 0.0 or e.dead_t > 0.0 or e.orb_cd > 0.0:
+					continue
+				if e.pos.distance_to(p) < e.size / 2.0 + 6:
+					e.orb_cd = 0.45
+					_hit_enemy(e, dmg, [], false, false, (e.pos - hero_pos).normalized() * 90.0)
+					_burst(p, Color("e8ecf8"), 4)
+	if _sk("spirit") > 0:
+		spirit_t -= dt
+		if spirit_t <= 0.0 and aim_target != null:
+			spirit_t = 0.9
+			for i in _sk("spirit"):
+				var sp := _spirit_pos(i)
+				var d: Vector2 = (aim_target.pos - sp).normalized()
+				shots.append({
+					"pos": sp, "vel": d * 210.0, "life": 1.6, "dmg": 7.0 * (1.0 + 0.18 * _sk("atk")), "crit": false,
+					"w": "spirit", "slots": ["fire", ""], "size": 3, "area": 0.0, "hit": [], "col": Data.EL_COLOR.fire,
+					"pierce": false, "bounce": 0, "chain": 0, "kb": 30.0,
+				})
+
+func _orbit_count() -> int:
+	return 0 if _sk("orbit") == 0 else _sk("orbit") + 1
+
+func _orbit_pos(i: int, n: int) -> Vector2:
+	return hero_pos + Vector2.from_angle(orb_ang + TAU * i / n) * 27.0
+
+func _spirit_pos(i: int) -> Vector2:
+	var side := -1.0 if i == 0 else 1.0
+	return hero_pos + Vector2(side * 15.0, -16.0 + sin(time * 3.0 + i) * 2.0)
 
 func _shot_color(w: Dictionary) -> Color:
 	var a: String = w.slots[0]
@@ -477,6 +594,7 @@ func _shot_color(w: Dictionary) -> Color:
 
 func _update_shots(dt: float) -> void:
 	var keep: Array = []
+	var room := _room_rect()
 	for s in shots:
 		s.pos += s.vel * dt
 		s.life -= dt
@@ -492,18 +610,44 @@ func _update_shots(dt: float) -> void:
 				continue
 			if e.pos.distance_to(s.pos) < e.size / 2.0 + s.size:
 				s.hit.append(e)
-				_hit_enemy(e, s.dmg, s.slots, true, s.crit)
+				_hit_enemy(e, s.dmg, s.slots, s.w != "spirit", s.crit, s.vel.normalized() * s.kb)
 				if s.area > 0.0:
 					_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
-				if s.w != "sword":
-					done = true
-					break
-		if not done and _in_rock(s.pos):
-			if s.area > 0.0:
-				_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
-			_burst(s.pos, Color("8a8a96"), 3)
-			done = true
-		if not _room_rect().grow(4).has_point(s.pos):
+				if s.chain > 0:
+					# salta sul nemico più vicino
+					var n = _nearest_enemy(s.pos, s.hit, 95.0)
+					if n != null:
+						s.chain -= 1
+						s.vel = (n.pos - s.pos).normalized() * s.vel.length()
+						s.life = maxf(s.life, 0.6)
+						s.dmg *= 0.8
+						break
+				if s.w == "sword":
+					continue
+				if s.pierce:
+					s.dmg *= 0.75
+					continue
+				done = true
+				break
+		if not done and (_in_rock(s.pos) or not room.has_point(s.pos)):
+			if s.bounce > 0:
+				var prev: Vector2 = s.pos - s.vel * dt
+				var tx := Vector2(s.pos.x, prev.y)
+				if _in_rock(tx) or not room.has_point(tx):
+					s.vel.x = -s.vel.x
+				else:
+					s.vel.y = -s.vel.y
+				s.pos = prev
+				s.bounce -= 1
+				s.life = maxf(s.life, 0.5)
+				s.hit.clear()
+				_burst(s.pos, s.col, 3)
+			elif _in_rock(s.pos):
+				if s.area > 0.0:
+					_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
+				_burst(s.pos, Color("8a8a96"), 3)
+				done = true
+		if not room.grow(4).has_point(s.pos):
 			done = true
 		if s.life <= 0.0:
 			if s.area > 0.0 and s.hit.is_empty():
@@ -547,7 +691,7 @@ func _immune(e: Dictionary, el: String) -> bool:
 		return false
 	return Data.FAMILIES[e.fam].immune == el
 
-func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool, crit: bool = false) -> void:
+func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool, crit: bool = false, kb: Vector2 = Vector2.ZERO) -> void:
 	if e.inv > 0.0:
 		_float(e.pos + Vector2(0, -e.size), "IMMUNE", Art.TEXT_DIM)
 		return
@@ -570,7 +714,13 @@ func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool, crit: b
 		col = Color("ffe14a")
 	elif mult < 0.8:
 		col = Art.TEXT_DIM
-	_damage(e, dmg, col, slots)
+	if kb != Vector2.ZERO:
+		var resist := 0.2 if e.boss else (0.5 if e.size >= 26 else 1.0)
+		e.kb = kb * resist
+	if crit:
+		hitstop = maxf(hitstop, 0.03)
+		shake = maxf(shake, 0.4)
+	_damage(e, dmg, col, slots, crit)
 	if e.dead_t > 0.0 or e.hp <= 0.0:
 		return
 	# effetti degli elementi
@@ -619,13 +769,13 @@ func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool, crit: b
 				if clouds.size() < 6:
 					clouds.append({"pos": e.pos, "r": 22.0, "life": 2.6, "kind": "toxic", "dps": base * 0.5})
 
-func _damage(e: Dictionary, amount: float, col: Color, slots: Array = []) -> void:
+func _damage(e: Dictionary, amount: float, col: Color, slots: Array = [], crit: bool = false) -> void:
 	if e.dead_t > 0.0:
 		return
 	e.hp -= amount
 	e.flash = 1.0
 	if amount >= 1.0:
-		_float(e.pos + Vector2(randf_range(-4, 4), -e.size / 2.0 - 4), str(int(round(amount))), col)
+		_float(e.pos + Vector2(randf_range(-4, 4), -e.size / 2.0 - 4), str(int(round(amount))) + ("!" if crit else ""), col, crit)
 	if e.hp <= 0.0:
 		_kill(e, slots)
 
@@ -641,10 +791,27 @@ func _kill(e: Dictionary, slots: Array = []) -> void:
 	if _combo(slots) == "ice+thunder" and (e.slow > 0.0 or e.freeze > 0.0):
 		_explode(e.pos, 26.0, 18.0, [], Color("bfefff"))
 	e.dead = true
-	shake = maxf(shake, 0.5 if not e.boss else 1.5)
-	_burst(e.pos, _enemy_color(e), 10 if not e.boss else 40)
+	shake = maxf(shake, 0.6 if not e.boss else 1.8)
+	hitstop = maxf(hitstop, 0.04 if not e.boss else 0.2)
+	_burst(e.pos, _enemy_color(e), 12 if not e.boss else 40)
+	_burst(e.pos, Color.WHITE, 5)
+	rings.append({"pos": e.pos, "r0": e.size * 0.4, "r1": e.size * 1.4, "life": 0.3, "max": 0.3, "col": Color.WHITE})
+	# esperienza
+	var gx := 2
+	if e.k == "miniboss":
+		gx = 25
+	elif e.k == "boss":
+		gx = 0
+	elif e.size >= 26:
+		gx = 4
+	_gain_xp(gx, e.pos)
+	if _sk("drain") > 0:
+		hero_hp = mini(max_hp, hero_hp + 3 * _sk("drain"))
 	# bottino
 	var n: int = e.sparks + (1 if bonus.extra_spark else 0)
+	for i in _sk("spark"):
+		if randf() < 0.5:
+			n += 1
 	for i in n:
 		_drop("spark", e.pos)
 	if Gear.FAMILY_MATERIAL.has(e.fam) and randf() < 0.22:
@@ -681,8 +848,9 @@ func _drop(kind: String, p: Vector2) -> void:
 # ---------------------------------------------------------------------
 func _update_enemies(dt: float) -> void:
 	for e in enemies:
-		e.flash = maxf(0.0, e.flash - dt * 6.0)
+		e.flash = maxf(0.0, e.flash - dt * 7.0)
 		e.inv = maxf(0.0, e.inv - dt)
+		e.orb_cd = maxf(0.0, e.orb_cd - dt)
 		if e.spawn > 0.0:
 			e.spawn -= dt
 			continue
@@ -735,6 +903,8 @@ func _update_enemies(dt: float) -> void:
 			"boss":
 				_ai_boss(e, dt, dir, dist, spd)
 		e.pos += e.vel * dt
+		e.pos += e.kb * dt
+		e.kb = e.kb.move_toward(Vector2.ZERO, 700.0 * dt)
 		# contatto con l'eroe
 		if dist < (e.size + HERO_SIZE) / 2.0 - 2:
 			_hurt_hero(e.dmg if e.kind != "slammer" else 10)
@@ -954,7 +1124,9 @@ func _hurt_hero(dmg: int) -> void:
 	hero_hp -= dmg
 	hero_inv = 0.8
 	hero_flash = 1.0
-	shake = maxf(shake, 1.0)
+	hurt_t = 1.0
+	shake = maxf(shake, 1.2)
+	hitstop = maxf(hitstop, 0.05)
 	_float(hero_pos + Vector2(0, -12), "-%d" % dmg, Art.HP)
 	if hero_hp <= 0 and bonus.revive and not revived:
 		revived = true
@@ -1001,9 +1173,13 @@ func _update_fx(dt: float) -> void:
 		p.life -= dt
 	parts = parts.filter(func(p): return p.life > 0.0)
 	for f in floats:
-		f.pos.y -= 18 * dt
+		f.pos += f.vel * dt
+		f.vel.y += 140.0 * dt
 		f.life -= dt
 	floats = floats.filter(func(f): return f.life > 0.0)
+	for r in rings:
+		r.life -= dt
+	rings = rings.filter(func(r): return r.life > 0.0)
 	for b in bolts:
 		b.life -= dt
 	bolts = bolts.filter(func(b): return b.life > 0.0)
@@ -1037,6 +1213,8 @@ func _room_cleared() -> void:
 
 func _next_room() -> void:
 	room_n += 1
+	fade_t = 0.35
+	volley_q.clear()
 	hero_hp = mini(max_hp, hero_hp + int(bonus.room_heal))   # piccola cura tra le stanze
 	_start_room()
 
@@ -1045,8 +1223,51 @@ func _burst(p: Vector2, col: Color, n: int) -> void:
 		var a := randf() * TAU
 		parts.append({"pos": p, "vel": Vector2(cos(a), sin(a)) * randf_range(30, 110), "life": randf_range(0.25, 0.6), "max": 0.6, "col": col, "size": 2 if randf() < 0.5 else 1})
 
-func _float(p: Vector2, t: String, col: Color) -> void:
-	floats.append({"pos": p, "txt": t, "col": col, "life": 0.7})
+func _float(p: Vector2, t: String, col: Color, big: bool = false) -> void:
+	floats.append({"pos": p, "txt": t, "col": col, "life": 0.75 if not big else 0.95, "big": big,
+		"vel": Vector2(randf_range(-22, 22), -70.0 if not big else -90.0)})
+
+# ---------------------------------------------------------------------
+#  Livelli e abilità
+# ---------------------------------------------------------------------
+func _gain_xp(n: int, from: Vector2) -> void:
+	if n <= 0:
+		return
+	xp += n
+	for i in mini(n, 4):
+		parts.append({"pos": from, "vel": Vector2.from_angle(randf() * TAU) * 40.0, "life": 0.5, "max": 0.5, "col": Color("7dffb0"), "size": 2})
+	while xp >= Skills.xp_need(lvl):
+		xp -= Skills.xp_need(lvl)
+		lvl += 1
+		pending_lv += 1
+
+func _open_level() -> void:
+	level_choices = Skills.roll(skills, float(hero_hp) / max_hp)
+	if level_choices.is_empty():
+		pending_lv = 0
+		return
+	level_ret = state
+	state = St.LEVEL
+	lvl_t = 0.0
+	touch_index = -1
+	hero_vel = Vector2.ZERO
+
+func _pick_skill(i: int) -> void:
+	if i >= level_choices.size() or lvl_t < 0.35:
+		return
+	var k: String = level_choices[i]
+	skills[k] = _sk(k) + 1
+	match k:
+		"hp":
+			max_hp += 25
+			hero_hp += 25
+		"heal":
+			hero_hp = mini(max_hp, hero_hp + int(max_hp * 0.4))
+	pending_lv -= 1
+	state = level_ret
+	_burst(hero_pos, Art.GOLD, 24)
+	rings.append({"pos": hero_pos, "r0": 6.0, "r1": 46.0, "life": 0.45, "max": 0.45, "col": Art.GOLD})
+	_float(hero_pos + Vector2(0, -24), Skills.LIST[k].name, Color("ffd36b"))
 
 # =====================================================================
 #  Forgia
@@ -1103,7 +1324,9 @@ func _ui_tap(p: Vector2) -> void:
 			return
 
 func _ui_action(key: String) -> void:
-	if key == "resume":
+	if key.begins_with("skill"):
+		_pick_skill(int(key.substr(5)))
+	elif key == "resume":
 		state = St.PLAY if anvil.is_empty() else St.CLEAR
 		if enemies.is_empty() and wave_idx >= waves.size():
 			state = St.CLEAR
@@ -1209,7 +1432,16 @@ func _draw() -> void:
 		_draw_drop(d)
 	for e in enemies:
 		_draw_enemy_telegraph(e)
+	_draw_aim_marker()
 	_draw_rocks()
+	# ombre dei proiettili: danno l'idea che volino sopra il pavimento
+	for sh in shots:
+		draw_set_transform(sh.pos + Vector2(0, 8), 0, Vector2(1, 0.4))
+		draw_circle(Vector2.ZERO, sh.size * 0.9 + 1.5, Color(0, 0, 0, 0.28))
+	for b in bullets:
+		draw_set_transform(b.pos + Vector2(0, 8), 0, Vector2(1, 0.4))
+		draw_circle(Vector2.ZERO, b.r + 1.0, Color(0, 0, 0, 0.28))
+	draw_set_transform(off)
 	# dall'alto in basso, così chi sta davanti copre chi sta dietro
 	var actors: Array = enemies.duplicate()
 	actors.sort_custom(func(a, b): return a.pos.y < b.pos.y)
@@ -1221,6 +1453,8 @@ func _draw() -> void:
 		_draw_enemy(e)
 	if not hero_drawn and state != St.DEAD:
 		_draw_hero()
+	if state != St.DEAD:
+		_draw_helpers()
 	for sh in shots:
 		_draw_shot(sh)
 	for b in bullets:
@@ -1230,13 +1464,16 @@ func _draw() -> void:
 		draw_circle(b.pos - Vector2(b.r, b.r) * 0.3, b.r * 0.45, Color(1, 1, 1, 0.85))
 	for b in bolts:
 		_draw_bolt(b.a, b.b)
+	for rg in rings:
+		var k: float = 1.0 - rg.life / rg.max
+		draw_arc(rg.pos, lerpf(rg.r0, rg.r1, k), 0, TAU, 32, Color(rg.col, (1.0 - k) * 0.8), 2.5 * (1.0 - k) + 0.5, true)
 	for p in parts:
 		var c: Color = p.col
 		var a: float = clampf(p.life / p.max * 1.5, 0.0, 1.0)
 		c.a = a
 		draw_circle(p.pos, p.size * 0.9, c)
 	for f in floats:
-		var a: float = clampf(f.life * 2.5, 0.0, 1.0)
+		var a: float = clampf(f.life * 3.0, 0.0, 1.0)
 		var big: bool = f.get("big", false)
 		PixelFont.draw_centered(self, f.txt, f.pos.x, f.pos.y - 6, 2 if big else 1, Color(f.col, a), Color(OUT, a))
 	if touch_index != -1 and (state == St.PLAY or state == St.CLEAR):
@@ -1246,13 +1483,149 @@ func _draw() -> void:
 		draw_circle(knob, 9, Color(1, 1, 1, 0.45))
 	draw_set_transform(Vector2.ZERO)
 	_draw_vignette()
+	if hurt_t > 0.0:
+		_draw_hurt()
+	if fade_t > 0.0:
+		draw_rect(Rect2(0, HUD_H, _size().x, _size().y - HUD_H - BAR_H), Color(0.04, 0.02, 0.08, fade_t / 0.35))
 	_draw_hud()
 	_draw_bar()
 	_draw_banner()
 	match state:
 		St.FORGE: _draw_forge()
 		St.PAUSE: _draw_pause()
+		St.LEVEL: _draw_levelup()
 		St.DEAD, St.WIN: _draw_end()
+
+## Segno rosso sotto il nemico che stai mirando
+func _draw_aim_marker() -> void:
+	if aim_target == null or state != St.PLAY:
+		return
+	var e: Dictionary = aim_target
+	if e.get("dead", false) or e.dead_t > 0.0:
+		return
+	var r: float = e.size / 2.0 + 5.0
+	var c: Vector2 = e.pos + Vector2(0, e.size * 0.42)
+	draw_set_transform(c, 0, Vector2(1, 0.45))
+	draw_arc(Vector2.ZERO, r, 0, TAU, 32, Color(1, 0.25, 0.3, 0.35), 3.0, true)
+	for i in 4:
+		var a := time * 2.5 + i * TAU / 4.0
+		draw_arc(Vector2.ZERO, r, a, a + 0.8, 8, Color(1, 0.35, 0.35, 0.95), 2.0, true)
+	draw_set_transform(Vector2.ZERO)
+
+func _draw_helpers() -> void:
+	var n := _orbit_count()
+	for i in n:
+		var p := _orbit_pos(i, n)
+		var a := orb_ang * 2.0 + i
+		Art.glow(self, p, 9, Color(1, 0.6, 0.25, 0.4))
+		# martello: manico + testa
+		var d := Vector2.from_angle(a)
+		draw_line(p - d * 5, p + d * 3, OUT, 3.5, true)
+		draw_line(p - d * 5, p + d * 3, Color("8a6a40"), 2.0, true)
+		var hd := p + d * 4
+		var o := d.orthogonal()
+		var pts := PackedVector2Array([hd - o * 4 - d * 2, hd + o * 4 - d * 2, hd + o * 4 + d * 2, hd - o * 4 + d * 2])
+		draw_colored_polygon(pts, Color("d8dcef"))
+		draw_polyline(PackedVector2Array([pts[0], pts[1], pts[2], pts[3], pts[0]]), OUT, 1.2, true)
+	for i in _sk("spirit"):
+		var sp := _spirit_pos(i)
+		Art.glow(self, sp, 10, Color(1, 0.5, 0.15, 0.55))
+		var fl := sin(time * 12.0 + i) * 1.2
+		_poly([sp + Vector2(-4, 1), sp + Vector2(-1.5, -6 + fl), sp + Vector2(0.5, -3), sp + Vector2(2.5, -7 - fl), sp + Vector2(4, 1), sp + Vector2(0, 4)], Color("ff8a2b"))
+		draw_circle(sp + Vector2(0, 0.5), 2.2, Color("ffe14a"))
+		draw_circle(sp + Vector2(-1.2, 0), 0.7, OUT)
+		draw_circle(sp + Vector2(1.2, 0), 0.7, OUT)
+
+func _draw_hurt() -> void:
+	var s := _size()
+	var top := HUD_H
+	var h := s.y - HUD_H - BAR_H
+	for i in 5:
+		var w := 4.0 + i * 5.0
+		var a := hurt_t * 0.16 * (5 - i) / 5.0
+		var c := Color(1, 0.1, 0.15, a)
+		draw_rect(Rect2(0, top, w, h), c)
+		draw_rect(Rect2(s.x - w, top, w, h), c)
+		draw_rect(Rect2(0, top, s.x, w), c)
+		draw_rect(Rect2(0, top + h - w, s.x, w), c)
+
+func _lines(t: String, max_w: float, scale: int) -> Array:
+	var out: Array = []
+	var cur := ""
+	for word in t.split(" "):
+		var tryl := word if cur == "" else cur + " " + word
+		if PixelFont.text_width(tryl, scale) > max_w and cur != "":
+			out.append(cur)
+			cur = word
+		else:
+			cur = tryl
+	if cur != "":
+		out.append(cur)
+	return out
+
+## Scelta dell'abilità quando sali di livello
+func _draw_levelup() -> void:
+	var s := _size()
+	var a := clampf(lvl_t * 4.0, 0.0, 1.0)
+	draw_rect(Rect2(Vector2.ZERO, s), Color(0.02, 0.01, 0.06, 0.8 * a))
+	var ty := s.y * 0.13
+	Art.glow(self, Vector2(s.x / 2.0, ty + 16), 90, Color(1, 0.7, 0.2, 0.35 * a))
+	for i in 10:
+		var ang := time * 0.6 + i * TAU / 10.0
+		var p := Vector2(s.x / 2.0, ty + 16) + Vector2.from_angle(ang) * (54 + 6 * sin(time * 3.0 + i))
+		draw_circle(p, 1.5, Color(1, 0.8, 0.3, 0.7 * a))
+	PixelFont.draw_centered(self, "Livello %d!" % lvl, s.x / 2.0, ty, 4, Color(1, 0.79, 0.29, a), Color(OUT, a))
+	PixelFont.draw_centered(self, "Scegli un'abilità", s.x / 2.0, ty + 40, 2, Color(1, 1, 1, a), Color(OUT, a))
+	var cw := 82.0
+	var ch := 158.0
+	var gap := 5.0
+	var x0 := (s.x - (cw * 3 + gap * 2)) / 2.0
+	var y0 := s.y * 0.3
+	for i in level_choices.size():
+		var k: String = level_choices[i]
+		var info: Dictionary = Skills.LIST[k]
+		var appear := clampf((lvl_t - i * 0.08) * 5.0, 0.0, 1.0)
+		var r := Rect2(x0 + i * (cw + gap), y0 + (1.0 - appear) * 40.0, cw, ch)
+		ui_rects["skill%d" % i] = r
+		var edge: Color = Skills.CAT_COLOR[info.cat]
+		Art.glow(self, r.get_center(), 70, Color(edge, 0.18 * appear))
+		_card(r, edge)
+		var ic := Vector2(r.get_center().x, r.position.y + 34)
+		Art.glow(self, ic, 30, Color(edge, 0.5))
+		Skills.icon(self, k, ic, 20)
+		var ly := r.position.y + 62
+		for line in _lines(info.name, cw - 8, 2):
+			PixelFont.draw_centered(self, line, r.get_center().x, ly, 2, Color.WHITE, OUT)
+			ly += 16
+		ly += 4
+		for line in _lines(info.desc, cw - 10, 1):
+			PixelFont.draw_centered(self, line, r.get_center().x, ly, 1, Color("c9bce8"))
+			ly += 11
+		# livello dell'abilità
+		var mx: int = info.max
+		if mx <= 5:
+			var have := _sk(k)
+			var px := r.get_center().x - (mx * 9 - 3) / 2.0
+			for j in mx:
+				var dc := Rect2(px + j * 9, r.end.y - 14, 6, 6)
+				Art.rbox(self, dc, edge if j < have + 1 else Color(1, 1, 1, 0.12), OUT if j == have else Color(0, 0, 0, 0), 3, 1)
+	# abilità già prese
+	var keys: Array = skills.keys()
+	if not keys.is_empty():
+		var by := y0 + ch + 26
+		PixelFont.draw_centered(self, "Le tue abilità", s.x / 2.0, by, 1, Art.TEXT_DIM)
+		_draw_skill_row(by + 22)
+
+func _draw_skill_row(y: float) -> void:
+	var keys: Array = skills.keys()
+	var s := _size()
+	var step := minf(22.0, (s.x - 20) / maxf(1, keys.size()))
+	var x := s.x / 2.0 - step * (keys.size() - 1) / 2.0
+	for k in keys:
+		Skills.icon(self, k, Vector2(x, y), 8)
+		if _sk(k) > 1:
+			PixelFont.draw_centered(self, str(_sk(k)), x + 7, y + 2, 1, Color.WHITE, OUT)
+		x += step
 
 # ---------------------------------------------------------------------
 #  Stanza
@@ -1466,7 +1839,11 @@ func _draw_enemy_telegraph(e: Dictionary) -> void:
 			elif e.st == "charge_aim":
 				draw_line(e.pos, e.pos + Vector2.from_angle(a) * 140, Color(wc, blink * 0.45), e.size * 0.8, true)
 			else:
-				draw_line(e.pos, e.pos + Vector2.from_angle(a) * 160, Color(wc, blink), 1.5, true)
+				var k: float = clampf(1.0 - e.t / 0.75, 0.0, 1.0)
+				var dv := Vector2.from_angle(a)
+				draw_line(e.pos, e.pos + dv * 160, Color(wc, 0.25), 3.0, true)
+				draw_line(e.pos, e.pos + dv * 160 * k, Color(wc, 0.9), 1.5, true)
+			PixelFont.draw_centered(self, "!", e.pos.x, e.pos.y - e.size / 2.0 - 22, 2, Color("ff3d5a"), OUT)
 		"throw":
 			for k in 5:
 				draw_line(e.pos, e.pos + Vector2.from_angle(e.aim + (k - 2) * 0.28) * 120, Color(wc, blink * 0.8), 1.5, true)
@@ -1589,7 +1966,7 @@ func _draw_enemy(e: Dictionary) -> void:
 			var bp := bc + Vector2(-r * 0.6 + i * r * 0.3, -r - 2 - fmod(time * 6.0 + i * 1.7, 4.0))
 			draw_circle(bp, 1.3, Data.EL_COLOR.poison)
 	if e.flash > 0.0:
-		draw_circle(bc, r + 1, Color(1, 1, 1, e.flash * 0.7))
+		draw_circle(bc, r + 1.5, Color(1, 1, 1, minf(1.0, e.flash * 1.1)))
 	if e.inv > 0.0 and fmod(time * 10.0, 2.0) < 1.0:
 		draw_circle(bc, r + 2, Color(1, 1, 0.6, 0.35))
 	# vita e debolezza
@@ -1687,6 +2064,11 @@ func _draw_shot(s: Dictionary) -> void:
 			draw_line(s.pos - dir * 9, s.pos, OUT, 3.0, true)
 			draw_line(s.pos - dir * 9, s.pos, Color("c8a070"), 1.5, true)
 			_poly([s.pos + dir * 3, s.pos - dir * 1 + dir.orthogonal() * 2.5, s.pos - dir * 1 - dir.orthogonal() * 2.5], col)
+		"spirit":
+			Art.glow(self, s.pos, 9, Color(1, 0.5, 0.15, 0.6))
+			draw_circle(s.pos, 3.5, OUT)
+			draw_circle(s.pos, 2.6, Color("ffb03a"))
+			draw_circle(s.pos - dir * 3, 1.6, Color(1, 0.6, 0.2, 0.6))
 		"staff":
 			Art.glow(self, s.pos, 14, Color(col, 0.6))
 			draw_circle(s.pos, s.size + 1.5, OUT)
@@ -1715,18 +2097,24 @@ func _draw_hud() -> void:
 		title += " · Mini-boss"
 	elif room_n in Data.BIG_FORGE_ROOMS:
 		title += " · Fucina"
-	PixelFont.draw_text(self, title, Vector2(6, 4), 2, Color.WHITE, OUT)
-	# barra di avanzamento del capitolo
-	Art.rbox(self, Rect2(6, 23, s.x - 12, 4), Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 2)
-	Art.rbox(self, Rect2(6, 23, (s.x - 12) * float(room_n - 1) / Data.ROOMS, 4), Color("5ab4ff"), Color(0, 0, 0, 0), 2)
+	PixelFont.draw_text(self, title, Vector2(6, 3), 2, Color.WHITE, OUT)
+	# livello ed esperienza della partita
+	var lr := Rect2(5, 21, 30, 13)
+	Art.rbox(self, lr, Color("2f8a5a"), OUT, 6, 1)
+	PixelFont.draw_centered(self, "Lv %d" % lvl, lr.get_center().x, lr.position.y + 1, 1, Color.WHITE, OUT)
+	var xr := Rect2(38, 24, s.x - 44, 7)
+	Art.rbox(self, xr, Color(1, 1, 1, 0.08), OUT, 4, 1)
+	var xk := clampf(float(xp) / Skills.xp_need(lvl), 0.0, 1.0)
+	if xk > 0.0:
+		Art.rbox(self, Rect2(xr.position + Vector2(1, 1), Vector2(maxf(4.0, (xr.size.x - 2) * xk), xr.size.y - 2)), Color("5ff0a0"), Color(0, 0, 0, 0), 3)
 	# monete a destra
 	var x := s.x - 30
 	for item in [["gem", run_gems, Art.GEM], ["gold", run_gold, Art.GOLD], ["spark", sparks, Color("ffb03a")]]:
 		var t := str(item[1])
 		var w := 18.0 + PixelFont.text_width(t, 1)
 		x -= w
-		Art.icon(self, item[0], Vector2(x, 6), 1.4, item[2])
-		PixelFont.draw_text(self, t, Vector2(x + 12, 6), 1, Color.WHITE, OUT)
+		Art.icon(self, item[0], Vector2(x, 5), 1.4, item[2])
+		PixelFont.draw_text(self, t, Vector2(x + 12, 5), 1, Color.WHITE, OUT)
 		x -= 2
 	var pr := _pause_rect()
 	Art.rbox(self, pr, Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.15), 5, 1)
@@ -1921,6 +2309,11 @@ func _draw_pause() -> void:
 	Art.button(self, r1, "Riprendi", Color("ff8a1a"), true, 2)
 	Art.button(self, r2, "Abbandona", Color("5b5577"), true, 1)
 	PixelFont.draw_centered(self, "Abbandonando tieni una parte del bottino", s.x / 2.0, r2.end.y + 12, 1, Art.TEXT_DIM)
+	PixelFont.draw_centered(self, "Livello %d · abilità prese" % lvl, s.x / 2.0, r2.end.y + 44, 1, Color.WHITE)
+	if skills.is_empty():
+		PixelFont.draw_centered(self, "Nessuna: sali di livello sconfiggendo nemici", s.x / 2.0, r2.end.y + 62, 1, Art.TEXT_DIM)
+	else:
+		_draw_skill_row(r2.end.y + 70)
 
 func _draw_end() -> void:
 	if end_t < 0.8:
@@ -1931,7 +2324,7 @@ func _draw_end() -> void:
 	var win := state == St.WIN
 	var y := s.y * 0.12
 	PixelFont.draw_centered(self, "Vittoria!" if win else "Sei caduta", s.x / 2.0, y, 4, Color("ffc94a") if win else Color("ff5a6a"), OUT)
-	var sub := "La Fonderia caduta · capitolo completato" if win else "Arrivata alla stanza %d di %d" % [room_n, Data.ROOMS]
+	var sub := ("La Fonderia caduta · capitolo completato · livello %d" % lvl) if win else "Arrivata alla stanza %d di %d · livello %d" % [room_n, Data.ROOMS, lvl]
 	PixelFont.draw_centered(self, sub, s.x / 2.0, y + 36, 1, Color("c9b8ff"))
 	var pr := Rect2(18, y + 54, s.x - 36, 150)
 	Art.rbox(self, pr, Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.15), 12, 1)
@@ -1978,7 +2371,7 @@ var _dbg_t := 0.0
 func _autotest_step() -> void:
 	if time - _dbg_t > 10.0:
 		_dbg_t = time
-		print("T ", int(time), " room ", room_n, " st ", state, " en ", enemies.size(), " wave ", wave_idx, "/", waves.size(), " shots ", shots.size())
+		print("T ", int(time), " lv ", lvl, " room ", room_n, " st ", state, " en ", enemies.size(), " wave ", wave_idx, "/", waves.size(), " shots ", shots.size())
 	if not "--mortal" in OS.get_cmdline_user_args():
 		hero_hp = max_hp
 	if state == St.PLAY:
@@ -2005,6 +2398,11 @@ func _autotest_step() -> void:
 		print("FORGE room ", room_n, " sparks ", sparks, " weapons ", weapons)
 		auto_forged = true
 		_ui_action("exit")
+	elif state == St.LEVEL:
+		if lvl_t > 0.4:
+			var pick := randi() % level_choices.size()
+			print("LEVEL ", lvl, " room ", room_n, " pick ", level_choices[pick])
+			_ui_action("skill%d" % pick)
 	elif state == St.DEAD or state == St.WIN:
 		if end_t > 1.0:
 			print("END ", "WIN" if state == St.WIN else "DEAD", " room ", room_n, " info ", end_info, " t=", time)
