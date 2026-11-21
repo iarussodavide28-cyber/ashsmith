@@ -25,7 +25,7 @@ const HERO_SPEED := 95.0
 const ACCEL := 900.0
 const FRICTION := 1100.0
 const JOY_RADIUS := 28.0
-const HERO_MAX_HP := 120
+const BASE_HP := 120
 
 # ---------- Stato ----------
 var state := St.PLAY
@@ -41,7 +41,12 @@ var purchases := 0
 var hero_pos := Vector2.ZERO
 var hero_vel := Vector2.ZERO
 var facing := Vector2.UP
-var hero_hp := HERO_MAX_HP
+var hero_hp := 120
+var max_hp := 120
+var bonus := {}
+var revived := false
+var run_mats := {"bone": 0, "stone": 0, "ember": 0}
+var run_items: Array = []
 var hero_inv := 0.0
 var hero_flash := 0.0
 var atk_t := 0.0
@@ -94,7 +99,10 @@ func _ready() -> void:
 	autotest = "--autotest" in OS.get_cmdline_user_args()
 	if autotest and "--staff" in OS.get_cmdline_user_args():
 		weapons = [{"key": "staff", "slots": ["", ""], "paid": [0, 0]}, {"key": "sword", "slots": ["", ""], "paid": [0, 0]}]
-	for k in Save.weapons:
+	bonus = Save.bonuses()
+	max_hp = BASE_HP + int(bonus.hp)
+	hero_hp = max_hp
+	for k in Save.run_weapons():
 		weapons.append({"key": k, "slots": ["", ""], "paid": [0, 0]})
 	_start_room()
 	_debug_params()
@@ -160,6 +168,7 @@ func _start_room() -> void:
 	clouds.clear(); patches.clear(); bolts.clear()
 	anvil = {}
 	door_open = false
+	sparks += int(bonus.get("first_spark", 0))
 	wave_idx = 0
 	wave_delay = 0.8
 	state = St.PLAY
@@ -304,7 +313,7 @@ func _update_hero(dt: float) -> void:
 		var off := joy_current - joy_origin
 		if off.length() > 3.0:
 			var strength := clampf((off.length() - 3.0) / (JOY_RADIUS - 3.0), 0.0, 1.0)
-			target = off.normalized() * HERO_SPEED * maxf(strength, 0.35)
+			target = off.normalized() * HERO_SPEED * (1.0 + bonus.speed_pct) * maxf(strength, 0.35)
 			facing = off.normalized()
 	if target != Vector2.ZERO:
 		hero_vel = hero_vel.move_toward(target, ACCEL * dt)
@@ -358,14 +367,19 @@ func _update_attack(dt: float) -> void:
 	var wd := _wdata()
 	var dir: Vector2 = (tg.pos - hero_pos).normalized()
 	facing = dir
-	atk_t = wd.rate
+	atk_t = wd.rate / (1.0 + bonus.aspd_pct)
 	var w := _w()
 	var col := _shot_color(w)
-	shots.append({
-		"pos": hero_pos + dir * 6, "vel": dir * wd.speed, "life": wd.range / wd.speed,
-		"dmg": wd.dmg, "w": w.key, "slots": w.slots.duplicate(), "size": wd.size,
-		"area": wd.area, "hit": [], "col": col,
-	})
+	var dmg: float = wd.dmg * (1.0 + bonus.weapon_atk[cur_w])
+	var angles: Array = [0.0] if not bonus.double_shot[cur_w] else [-0.14, 0.14]
+	for da in angles:
+		var d2 := dir.rotated(da)
+		var crit: bool = randf() < bonus.crit
+		shots.append({
+			"pos": hero_pos + d2 * 6, "vel": d2 * wd.speed, "life": wd.range / wd.speed,
+			"dmg": dmg * (2.0 if crit else 1.0), "crit": crit, "w": w.key, "slots": w.slots.duplicate(), "size": wd.size,
+			"area": wd.area, "hit": [], "col": col,
+		})
 
 func _shot_color(w: Dictionary) -> Color:
 	var a: String = w.slots[0]
@@ -395,7 +409,7 @@ func _update_shots(dt: float) -> void:
 				continue
 			if e.pos.distance_to(s.pos) < e.size / 2.0 + s.size:
 				s.hit.append(e)
-				_hit_enemy(e, s.dmg, s.slots, true)
+				_hit_enemy(e, s.dmg, s.slots, true, s.crit)
 				if s.area > 0.0:
 					_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
 				if s.w != "sword":
@@ -437,14 +451,15 @@ func _combo(slots: Array) -> String:
 		return ""
 	if slots[0] == "" or slots[1] == "" or slots[0] == slots[1]:
 		return ""
-	return Data.combo_key(slots[0], slots[1])
+	var k := Data.combo_key(slots[0], slots[1])
+	return k if k in Save.recipes else ""
 
 func _immune(e: Dictionary, el: String) -> bool:
 	if e.fam == "boss":
 		return false
 	return Data.FAMILIES[e.fam].immune == el
 
-func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool) -> void:
+func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool, crit: bool = false) -> void:
 	if e.inv > 0.0:
 		_float(e.pos + Vector2(0, -e.size), "IMMUNE", Art.TEXT_DIM)
 		return
@@ -458,7 +473,12 @@ func _hit_enemy(e: Dictionary, base: float, slots: Array, primary: bool) -> void
 	if combo == "ice+thunder" and (e.slow > 0.0 or e.freeze > 0.0):
 		dmg *= 1.5
 	var col := Color.WHITE
-	if mult >= 1.4:
+	if crit:
+		col = Color("ff9a2a")
+		if bonus.crit_burn and not _immune(e, "fire"):
+			e.burn = 3.0
+			e.burn_dps = maxf(e.burn_dps, base * 0.2)
+	elif mult >= 1.4:
 		col = Color("ffe14a")
 	elif mult < 0.8:
 		col = Art.TEXT_DIM
@@ -536,17 +556,30 @@ func _kill(e: Dictionary, slots: Array = []) -> void:
 	shake = maxf(shake, 0.5 if not e.boss else 1.5)
 	_burst(e.pos, _enemy_color(e), 10 if not e.boss else 40)
 	# bottino
-	var n: int = e.sparks
+	var n: int = e.sparks + (1 if bonus.extra_spark else 0)
 	for i in n:
 		_drop("spark", e.pos)
-	if randf() < 0.35 or e.boss:
+	if Gear.FAMILY_MATERIAL.has(e.fam) and randf() < 0.22:
+		_drop("mat_" + Gear.FAMILY_MATERIAL[e.fam], e.pos)
+	if e.k == "miniboss":
+		for i in 6:
+			_drop("mat_stone", e.pos)
+		run_items.append(Save.add_item(Gear.random_base(), Gear.roll_rarity([40.0, 40.0, 18.0, 2.0, 0.0])))
+		_banner("BOTTINO: UN PEZZO DI EQUIPAGGIAMENTO!")
+	if e.k == "boss":
+		for m in ["bone", "stone", "ember"]:
+			for i in 3:
+				_drop("mat_" + m, e.pos)
+		for i in 2:
+			run_items.append(Save.add_item(Gear.random_base(), Gear.roll_rarity([10.0, 45.0, 35.0, 10.0, 0.0])))
+	if randf() < 0.5 or e.boss:
 		for i in (randi_range(1, 2) if not e.boss else 12):
 			_drop("gold", e.pos)
 	if randf() < 0.05 or e.boss:
 		for i in (1 if not e.boss else 3):
 			_drop("gem", e.pos)
 	if e.k == "boss":
-		for i in 30:
+		for i in 60:
 			_drop("gold", e.pos)
 		for i in 5:
 			_drop("gem", e.pos)
@@ -824,11 +857,20 @@ func _update_ground(dt: float) -> void:
 func _hurt_hero(dmg: int) -> void:
 	if hero_inv > 0.0 or state != St.PLAY and state != St.CLEAR:
 		return
+	dmg = maxi(1, int(round(dmg * (1.0 - bonus.dmg_taken))))
 	hero_hp -= dmg
 	hero_inv = 0.8
 	hero_flash = 1.0
 	shake = maxf(shake, 1.0)
 	_float(hero_pos + Vector2(0, -12), "-%d" % dmg, Art.HP)
+	if hero_hp <= 0 and bonus.revive and not revived:
+		revived = true
+		hero_hp = int(max_hp * 0.4)
+		hero_inv = 2.0
+		bullets.clear()
+		_burst(hero_pos, Art.GOLD, 30)
+		_banner("SECONDA VITA!")
+		return
 	if hero_hp <= 0:
 		hero_hp = 0
 		_burst(hero_pos, HERO, 30)
@@ -853,6 +895,8 @@ func _update_drops(dt: float) -> void:
 				"spark": sparks += 1
 				"gold": run_gold += 1
 				"gem": run_gems += 1
+				_:
+					run_mats[d.kind.substr(4)] += 1
 			continue
 		keep.append(d)
 	drops = keep
@@ -899,7 +943,7 @@ func _room_cleared() -> void:
 
 func _next_room() -> void:
 	room_n += 1
-	hero_hp = mini(HERO_MAX_HP, hero_hp + 8)   # piccola cura tra le stanze
+	hero_hp = mini(max_hp, hero_hp + int(bonus.room_heal))   # piccola cura tra le stanze
 	_start_room()
 
 func _burst(p: Vector2, col: Color, n: int) -> void:
@@ -914,7 +958,8 @@ func _float(p: Vector2, t: String, col: Color) -> void:
 #  Forgia
 # =====================================================================
 func _price() -> int:
-	return Data.BASE_PRICE + Data.PRICE_STEP * purchases
+	var p := Data.BASE_PRICE + Data.PRICE_STEP * purchases
+	return int(p * 0.75) if bonus.get("cheap_forge", false) else p
 
 func _make_offers() -> void:
 	# offerte legate alle famiglie delle prossime stanze
@@ -971,7 +1016,7 @@ func _ui_action(key: String) -> void:
 	elif key == "quit":
 		_end_run(false)
 	elif key == "home":
-		get_tree().change_scene_to_file("res://scenes/lobby.tscn")
+		get_tree().change_scene_to_file("res://scenes/menu.tscn")
 	elif key == "again":
 		get_tree().reload_current_scene()
 	elif key == "exit":
@@ -1022,7 +1067,7 @@ func _ui_action(key: String) -> void:
 		purchases += 1
 		offers[sel_offer].sold = true
 		sel_offer = -1
-		var info := Data.slots_info(w.slots)
+		var info := Data.slots_info(w.slots, Save.recipes)
 		forge_msg = "%s: %s!" % [Data.WEAPONS[w.key].name, info[0]]
 		_burst(anvil.pos, Data.EL_COLOR[el], 20)
 
@@ -1039,7 +1084,11 @@ func _end_run(win: bool) -> void:
 	var spark_gold := sparks / Data.SPARK_TO_GOLD
 	var gold_kept := int(round((run_gold + spark_gold) * frac))
 	var gems_kept := int(round(run_gems * frac))
-	end_info = {"gold": run_gold, "spark_gold": spark_gold, "sparks": sparks, "frac": frac, "gold_kept": gold_kept, "gems_kept": gems_kept, "gems": run_gems}
+	end_info = {"gold": run_gold, "spark_gold": spark_gold, "sparks": sparks, "frac": frac, "gold_kept": gold_kept, "gems_kept": gems_kept, "gems": run_gems, "mats": {}}
+	for m in run_mats:
+		var kept := int(round(run_mats[m] * frac))
+		end_info.mats[m] = kept
+		Save.materials[m] += kept
 	Save.gold += gold_kept
 	Save.gems += gems_kept
 	Save.runs += 1
@@ -1180,6 +1229,10 @@ func _draw_drop(d: Dictionary) -> void:
 		"gem":
 			draw_rect(Rect2(p.x - 2, p.y - 3, 5, 6), Color("2a7aa0"))
 			draw_rect(Rect2(p.x - 1, p.y - 2, 3, 3), Art.GEM)
+		_:
+			var mc: Color = Gear.MATERIALS[d.kind.substr(4)].color
+			draw_rect(Rect2(p.x - 3, p.y - 3, 6, 6), Art.DARK)
+			draw_rect(Rect2(p.x - 2, p.y - 2, 4, 4), mc)
 
 func _enemy_color(e: Dictionary) -> Color:
 	match e.k:
@@ -1361,7 +1414,7 @@ func _draw_hud() -> void:
 	var bw := 70.0
 	draw_rect(Rect2(14, 5, bw + 2, 7), Art.DARK)
 	draw_rect(Rect2(15, 6, bw, 5), Color("3a1a1a"))
-	draw_rect(Rect2(15, 6, bw * float(hero_hp) / HERO_MAX_HP, 5), Art.HP)
+	draw_rect(Rect2(15, 6, bw * float(hero_hp) / max_hp, 5), Art.HP)
 	PixelFont.draw_text(self, str(hero_hp), Vector2(14 + bw + 6, 5), 1, Color.WHITE)
 	# monete
 	var x := 5.0
@@ -1415,7 +1468,7 @@ func _draw_bar() -> void:
 			var el: String = w.slots[si]
 			if el != "":
 				Art.el_icon(self, el, sr.position + Vector2(2, 2), 1)
-		var info := Data.slots_info(w.slots)
+		var info := Data.slots_info(w.slots, Save.recipes)
 		if w.slots[0] != "" and w.slots[1] != "":
 			PixelFont.draw_text(self, info[0].substr(0, 11), r.position + Vector2(4, r.size.y - 9), 1, _shot_color(w))
 	# pulsante cambio arma
@@ -1504,7 +1557,7 @@ func _draw_forge() -> void:
 			else:
 				PixelFont.draw_centered(self, "+", sr.get_center().x, sr.position.y + 10, 1, Art.TEXT_DIM)
 		# anteprima: cosa diventerebbe
-		var info := Data.slots_info(w.slots)
+		var info := Data.slots_info(w.slots, Save.recipes)
 		var tx := r.position.x + 134
 		var ny := _wrap_text(info[0], Vector2(tx, r.position.y + 6), r.end.x - tx - 4, _shot_color(w) if w.slots != ["", ""] else Art.TEXT_DIM)
 		var desc: String = info[1]
@@ -1597,17 +1650,34 @@ func _draw_end() -> void:
 	ly += 14
 	var tot := "+%d ORO   +%d GEMME" % [end_info.gold_kept, end_info.gems_kept]
 	PixelFont.draw_centered(self, tot, s.x / 2.0, ly, 2, Art.GOLD, Art.DARK)
-	PixelFont.draw_centered(self, "SALVATO: %d ORO, %d GEMME IN TOTALE" % [Save.gold, Save.gems], s.x / 2.0, pr.end.y + 10, 1, Art.TEXT_DIM)
-	var r1 := Rect2(s.x / 2.0 - 75, pr.end.y + 30, 150, 30)
-	var r2 := Rect2(s.x / 2.0 - 75, pr.end.y + 70, 150, 26)
+	# materiali e pezzi
+	var my := pr.end.y + 8
+	var mt := ""
+	var mx := s.x / 2.0 - 60
+	for m in ["bone", "stone", "ember"]:
+		var md: Dictionary = Gear.MATERIALS[m]
+		Art.icon(self, md.icon, Vector2(mx, my), 1, md.color)
+		PixelFont.draw_text(self, "+%d" % end_info.mats.get(m, 0), Vector2(mx + 10, my), 1, Color.WHITE)
+		mx += 42
+	if not run_items.is_empty():
+		var bx := s.x / 2.0 - (run_items.size() * 34 - 4) / 2.0
+		for i in run_items.size():
+			Art.item_box(self, run_items[i], Rect2(bx + i * 34, my + 12, 30, 30))
+	var off_y := 52.0 if not run_items.is_empty() else 16.0
+	var r1 := Rect2(s.x / 2.0 - 75, pr.end.y + off_y + 4, 150, 30)
+	var r2 := Rect2(s.x / 2.0 - 75, pr.end.y + off_y + 42, 150, 26)
 	ui_rects["again"] = r1
 	ui_rects["home"] = r2
 	Art.button(self, r1, "RIGIOCA", Color("e0661f"), true, 2)
 	Art.button(self, r2, "CAMPO BASE", Color("5a4a6a"), true, 1)
 
+var _dbg_t := 0.0
 func _autotest_step() -> void:
+	if time - _dbg_t > 10.0:
+		_dbg_t = time
+		print("T ", int(time), " room ", room_n, " st ", state, " en ", enemies.size(), " wave ", wave_idx, "/", waves.size(), " shots ", shots.size())
 	if not "--mortal" in OS.get_cmdline_user_args():
-		hero_hp = HERO_MAX_HP
+		hero_hp = max_hp
 	if state == St.PLAY:
 		auto_target = null
 		auto_forged = false

@@ -21,6 +21,18 @@ const ICONS := {
 	"heart": ["0110110","1111111","1111111","1111111","0111110","0011100","0001000"],
 	"skull": ["0111110","1111111","1001001","1111111","0110110","0111110","0000000"],
 	"question": ["0111110","1100011","0000110","0001100","0001100","0000000","0001100"],
+	"helmet": ["0011100","0111110","1111111","1101011","1101011","1100011","0000000"],
+	"armor": ["1100011","1111111","1111111","0111110","0111110","0111110","0011100"],
+	"gloves": ["0101010","0101010","0111110","1111110","0111110","0111100","0011100"],
+	"boots": ["0011100","0011100","0011100","0011100","0011110","1111111","1111111"],
+	"ring": ["0001000","0011100","0001000","0110110","1000001","1000001","0111110"],
+	"rock": ["0000000","0011100","0111110","1111011","1110111","1111111","0111110"],
+	"lock": ["0011100","0100010","0100010","1111111","1110111","1110111","1111111"],
+	"chest": ["0111110","1000001","1111111","1110111","1111111","1000001","1111111"],
+	"book": ["1111110","1000011","1011011","1000011","1011011","1000011","1111110"],
+	"play": ["1000000","1100000","1110000","1111000","1110000","1100000","1000000"],
+	"bag": ["0011100","0100010","1111111","1111111","1101011","1111111","0111110"],
+	"shop": ["1111111","1010101","1111111","0000000","1011101","1011101","1111111"],
 	"sword": ["0000011","0000111","0001110","1011100","0111000","0110000","1001000"],
 	"bow": ["0111000","1000100","1000010","1111111","1000010","1000100","0111000"],
 	"staff": ["0001110","0001110","0001110","0010000","0100000","1000000","0000000"],
@@ -59,3 +71,23 @@ static func counter(canvas: CanvasItem, icon_name: String, value: int, pos: Vect
 	var t := str(value)
 	PixelFont.draw_text(canvas, t, pos + Vector2(9, 0), 1, Color.WHITE)
 	return 9 + PixelFont.text_width(t, 1) + 6
+
+## Icona di un pezzo di equipaggiamento
+static func item_icon_name(item: Dictionary) -> String:
+	var t: String = Gear.BASES[item.base].type
+	if t == "weapon":
+		return Gear.BASES[item.base].weapon
+	return t
+
+## Riquadro di un pezzo (colore della rarità, icona, livello)
+static func item_box(canvas: CanvasItem, item: Dictionary, r: Rect2, selected: bool = false) -> void:
+	var rc: Color = Gear.RARITY[item.rar].color
+	canvas.draw_rect(r.grow(1), DARK)
+	canvas.draw_rect(r, rc if not selected else Color.WHITE)
+	canvas.draw_rect(r.grow(-1), rc.darkened(0.7))
+	canvas.draw_rect(Rect2(r.position + Vector2(1, 1), Vector2(r.size.x - 2, 3)), rc.darkened(0.45))
+	var sc := 3 if r.size.x >= 28 else 2
+	var isz := 7 * sc
+	icon(canvas, item_icon_name(item), r.get_center() - Vector2(isz, isz) / 2.0 - Vector2(0, 2), sc, Color.WHITE.lerp(rc, 0.35))
+	var t := "L%d" % item.lv
+	PixelFont.draw_text(canvas, t, Vector2(r.end.x - PixelFont.text_width(t, 1) - 2, r.end.y - 8), 1, Color.WHITE)

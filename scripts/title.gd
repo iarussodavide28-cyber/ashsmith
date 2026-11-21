@@ -12,7 +12,7 @@ const STEEL_LIGHT := Color("8a90a3")
 const STEEL_DARK := Color("33353f")
 const WOOD := Color("6b3d22")
 
-const VERSION_TEXT := "V0.3 - BASE DEL GIOCO"
+const VERSION_TEXT := "V0.4"
 
 var embers: Array = []        # braci che salgono lente
 var sparks: Array = []        # scintille del colpo di martello
@@ -59,7 +59,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_hit_anvil()
 		starting = true
 		# un attimo per vedere le scintille, poi si entra nella stanza
-		get_tree().create_timer(0.45).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/lobby.tscn"))
+		get_tree().create_timer(0.45).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/menu.tscn"))
 
 func _hit_anvil() -> void:
 	hits += 1

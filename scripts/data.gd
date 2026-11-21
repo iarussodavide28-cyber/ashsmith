@@ -37,7 +37,7 @@ static func combo_key(a: String, b: String) -> String:
 	return "%s+%s" % [l[0], l[1]]
 
 ## Nome e descrizione di quello che c'è negli incastri di un'arma
-static func slots_info(slots: Array) -> Array:
+static func slots_info(slots: Array, recipes: Array = []) -> Array:
 	var a: String = slots[0]
 	var b: String = slots[1]
 	if a == "" and b == "":
@@ -47,7 +47,10 @@ static func slots_info(slots: Array) -> Array:
 		return [EL_NAME[e], EL_DESC[e]]
 	if a == b:
 		return FULL[a]
-	return COMBOS[combo_key(a, b)]
+	var k := combo_key(a, b)
+	if not recipes.is_empty() and not k in recipes:
+		return ["%s + %s" % [EL_NAME[a], EL_NAME[b]], "RICETTA SCONOSCIUTA: SOLO EFFETTI LEGGERI"]
+	return COMBOS[k]
 
 # ---------------- Armi ----------------
 const WEAPONS := {
