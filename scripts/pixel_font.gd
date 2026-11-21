@@ -1,83 +1,68 @@
 class_name PixelFont
-## Piccolo font pixel 5x7 disegnato a mano, così il testo resta nitido.
+## Testo del gioco (font Inter, come Braceforte 2).
+## Il nome è rimasto da quando il gioco era in pixel art: le funzioni sono le stesse.
 
-const W := 5
-const H := 7
+static var _bold: Font
+static var _semi: Font
 
-const GLYPHS := {
-	"A": ["01110","10001","10001","11111","10001","10001","10001"],
-	"B": ["11110","10001","10001","11110","10001","10001","11110"],
-	"C": ["01110","10001","10000","10000","10000","10001","01110"],
-	"D": ["11110","10001","10001","10001","10001","10001","11110"],
-	"E": ["11111","10000","10000","11110","10000","10000","11111"],
-	"F": ["11111","10000","10000","11110","10000","10000","10000"],
-	"G": ["01110","10001","10000","10111","10001","10001","01111"],
-	"H": ["10001","10001","10001","11111","10001","10001","10001"],
-	"I": ["01110","00100","00100","00100","00100","00100","01110"],
-	"J": ["00111","00010","00010","00010","00010","10010","01100"],
-	"K": ["10001","10010","10100","11000","10100","10010","10001"],
-	"L": ["10000","10000","10000","10000","10000","10000","11111"],
-	"M": ["10001","11011","10101","10101","10001","10001","10001"],
-	"N": ["10001","10001","11001","10101","10011","10001","10001"],
-	"O": ["01110","10001","10001","10001","10001","10001","01110"],
-	"P": ["11110","10001","10001","11110","10000","10000","10000"],
-	"Q": ["01110","10001","10001","10001","10101","10010","01101"],
-	"R": ["11110","10001","10001","11110","10100","10010","10001"],
-	"S": ["01111","10000","10000","01110","00001","00001","11110"],
-	"T": ["11111","00100","00100","00100","00100","00100","00100"],
-	"U": ["10001","10001","10001","10001","10001","10001","01110"],
-	"V": ["10001","10001","10001","10001","10001","01010","00100"],
-	"W": ["10001","10001","10001","10101","10101","10101","01010"],
-	"X": ["10001","10001","01010","00100","01010","10001","10001"],
-	"Y": ["10001","10001","01010","00100","00100","00100","00100"],
-	"Z": ["11111","00001","00010","00100","01000","10000","11111"],
-	"0": ["01110","10001","10011","10101","11001","10001","01110"],
-	"1": ["00100","01100","00100","00100","00100","00100","01110"],
-	"2": ["01110","10001","00001","00010","00100","01000","11111"],
-	"3": ["11110","00001","00001","01110","00001","00001","11110"],
-	"4": ["00010","00110","01010","10010","11111","00010","00010"],
-	"5": ["11111","10000","11110","00001","00001","10001","01110"],
-	"6": ["00110","01000","10000","11110","10001","10001","01110"],
-	"7": ["11111","00001","00010","00100","01000","01000","01000"],
-	"8": ["01110","10001","10001","01110","10001","10001","01110"],
-	"9": ["01110","10001","10001","01111","00001","00010","01100"],
-	".": ["00000","00000","00000","00000","00000","01100","01100"],
-	",": ["00000","00000","00000","00000","01100","00100","01000"],
-	":": ["00000","01100","01100","00000","01100","01100","00000"],
-	"-": ["00000","00000","00000","11111","00000","00000","00000"],
-	"!": ["00100","00100","00100","00100","00100","00000","00100"],
-	"?": ["01110","10001","00001","00010","00100","00000","00100"],
-	"'": ["00100","00100","01000","00000","00000","00000","00000"],
-	"+": ["00000","00100","00100","11111","00100","00100","00000"],
-	"/": ["00001","00010","00010","00100","01000","01000","10000"],
-	"%": ["11001","11010","00010","00100","01000","01011","10011"],
-	"(": ["00010","00100","01000","01000","01000","00100","00010"],
-	")": ["01000","00100","00010","00010","00010","00100","01000"],
-	"=": ["00000","00000","11111","00000","11111","00000","00000"],
-	" ": ["00000","00000","00000","00000","00000","00000","00000"],
-}
+static func bold() -> Font:
+	if _bold == null:
+		_bold = load("res://fonts/Inter-ExtraBold.otf")
+	return _bold
 
-## Larghezza in pixel del testo, con "scale" pixel per punto.
+static func semi() -> Font:
+	if _semi == null:
+		_semi = load("res://fonts/Inter-SemiBold.otf")
+	return _semi
+
+## "scale" come prima: 1 = testo piccolo, 2 = medio, 3 = grande, 4 = titolo
+static func px(scale: int) -> int:
+	match scale:
+		1: return 9
+		2: return 14
+		3: return 22
+		_: return 30
+
+static func _font(scale: int) -> Font:
+	return semi() if scale == 1 else bold()
+
+## Da "STANZA LIBERA" a "Stanza libera" (più leggibile, come Braceforte 2)
+static func nice(text: String) -> String:
+	var letters := 0
+	for ch in text:
+		if ch >= "A" and ch <= "Z":
+			letters += 1
+	if letters < 4 or text != text.to_upper():
+		return text
+	var low := text.to_lower()
+	var out := ""
+	var cap := true
+	for i in low.length():
+		var ch := low[i]
+		if cap and ch.to_upper() != ch:
+			out += ch.to_upper()
+			cap = false
+		else:
+			out += ch
+			if ch >= "0" and ch <= "9":
+				cap = false
+		if ch == "." or ch == "!" or ch == "?" or ch == ":":
+			cap = true
+	return out
+
 static func text_width(text: String, scale: int) -> int:
-	if text.is_empty():
-		return 0
-	return (text.length() * (W + 1) - 1) * scale
+	return int(_font(scale).get_string_size(nice(text), HORIZONTAL_ALIGNMENT_LEFT, -1, px(scale)).x)
 
-## Disegna il testo su "canvas" partendo dall'angolo in alto a sinistra.
-static func draw_text(canvas: CanvasItem, text: String, pos: Vector2, scale: int, color: Color) -> void:
-	var x := pos.x
-	for ch in text.to_upper():
-		var g: Array = GLYPHS.get(ch, GLYPHS["?"])
-		for row in H:
-			var line: String = g[row]
-			for col in W:
-				if line[col] == "1":
-					canvas.draw_rect(Rect2(x + col * scale, pos.y + row * scale, scale, scale), color)
-		x += (W + 1) * scale
-
-## Disegna il testo centrato orizzontalmente su "center_x", con ombra.
-static func draw_centered(canvas: CanvasItem, text: String, center_x: float, y: float, scale: int, color: Color, shadow: Color = Color(0, 0, 0, 0)) -> void:
-	var x := floorf(center_x - text_width(text, scale) / 2.0)
+## Testo con l'angolo in alto a sinistra in "pos"
+static func draw_text(canvas: CanvasItem, text: String, pos: Vector2, scale: int, color: Color, shadow: Color = Color(0, 0, 0, 0)) -> void:
+	var f := _font(scale)
+	var size := px(scale)
+	var t := nice(text)
+	var base := pos + Vector2(0, f.get_ascent(size) - 1)
 	if shadow.a > 0.0:
-		draw_text(canvas, text, Vector2(x, y + scale), scale, shadow)
-	draw_text(canvas, text, Vector2(x, y), scale, color)
+		canvas.draw_string_outline(f, base, t, HORIZONTAL_ALIGNMENT_LEFT, -1, size, maxi(2, size / 5), shadow)
+	canvas.draw_string(f, base, t, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+
+static func draw_centered(canvas: CanvasItem, text: String, center_x: float, y: float, scale: int, color: Color, shadow: Color = Color(0, 0, 0, 0)) -> void:
+	var w := text_width(text, scale)
+	draw_text(canvas, text, Vector2(center_x - w / 2.0, y), scale, color, shadow)

@@ -1,164 +1,110 @@
 extends Node2D
-## Schermata iniziale (passo 1): nome del gioco, incudine, braci che salgono.
-## Toccando lo schermo il martello colpisce l'incudine (prova che il tocco funziona).
+## Schermata iniziale: nome del gioco, incudine con braci. Tocca per entrare.
 
-const BG_TOP := Color("1a0f12")
-const BG_BOTTOM := Color("3a1a12")
-const ORANGE := Color("ff8a2b")
-const YELLOW := Color("ffd25a")
-const DARK := Color("120a0c")
-const STEEL := Color("5b5f6e")
-const STEEL_LIGHT := Color("8a90a3")
-const STEEL_DARK := Color("33353f")
-const WOOD := Color("6b3d22")
+const VERSION_TEXT := "v0.5"
 
-const VERSION_TEXT := "V0.4"
-
-var embers: Array = []        # braci che salgono lente
-var sparks: Array = []        # scintille del colpo di martello
+var embers: Array = []
+var sparks: Array = []
 var time := 0.0
-var strike := 0.0             # 1 appena colpito, scende a 0
-var shake := 0.0
-var hits := 0
+var strike := 0.0
 var starting := false
 
 func _ready() -> void:
 	randomize()
-	var size := get_viewport_rect().size
+	var s := get_viewport_rect().size
 	for i in 40:
-		embers.append(_new_ember(size, true))
-
-func _new_ember(size: Vector2, anywhere: bool) -> Dictionary:
-	return {
-		"pos": Vector2(randf() * size.x, (randf() * size.y) if anywhere else size.y + 4.0),
-		"vel": Vector2(randf_range(-6, 6), randf_range(-28, -12)),
-		"life": randf_range(0.5, 1.0),
-		"size": 1.0 if randf() < 0.7 else 2.0,
-	}
+		embers.append({"pos": Vector2(randf() * s.x, randf() * s.y), "vel": Vector2(randf_range(-6, 6), randf_range(-30, -12)), "r": randf_range(0.6, 1.6)})
 
 func _process(delta: float) -> void:
 	time += delta
-	var size := get_viewport_rect().size
+	var s := get_viewport_rect().size
 	for e in embers:
 		e.pos += e.vel * delta
 		e.pos.x += sin(time * 2.0 + e.pos.y * 0.05) * 6.0 * delta
-		if e.pos.y < -4.0:
-			e.merge(_new_ember(size, false), true)
-	for s in sparks:
-		s.vel.y += 260.0 * delta
-		s.pos += s.vel * delta
-		s.life -= delta
-	sparks = sparks.filter(func(s): return s.life > 0.0)
+		if e.pos.y < -4:
+			e.pos = Vector2(randf() * s.x, s.y + 4)
+	for p in sparks:
+		p.vel.y += 260.0 * delta
+		p.pos += p.vel * delta
+		p.life -= delta
+	sparks = sparks.filter(func(p): return p.life > 0.0)
 	strike = maxf(0.0, strike - delta * 4.0)
-	shake = maxf(0.0, shake - delta * 6.0)
 	queue_redraw()
 
 func _unhandled_input(event: InputEvent) -> void:
-	var pressed: bool = event is InputEventScreenTouch and event.pressed
-	if pressed and not starting:
-		_hit_anvil()
+	if event is InputEventScreenTouch and event.pressed and not starting:
 		starting = true
-		# un attimo per vedere le scintille, poi si entra nella stanza
+		strike = 1.0
+		var c := _anvil_pos()
+		for i in 30:
+			var a := randf_range(PI * 1.05, PI * 1.95)
+			sparks.append({"pos": c + Vector2(0, -8), "vel": Vector2.from_angle(a) * randf_range(60, 170), "life": randf_range(0.3, 0.8)})
 		get_tree().create_timer(0.45).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/menu.tscn"))
 
-func _hit_anvil() -> void:
-	hits += 1
-	strike = 1.0
-	shake = 1.0
-	var c := _anvil_top_center()
-	for i in 28:
-		var a := randf_range(PI * 1.05, PI * 1.95)
-		var sp := randf_range(60, 170)
-		sparks.append({
-			"pos": c,
-			"vel": Vector2(cos(a), sin(a)) * sp,
-			"life": randf_range(0.35, 0.8),
-			"col": YELLOW if randf() < 0.5 else ORANGE,
-		})
-
-func _anvil_top_center() -> Vector2:
-	var size := get_viewport_rect().size
-	return Vector2(floorf(size.x / 2.0), floorf(size.y * 0.62))
+func _anvil_pos() -> Vector2:
+	var s := get_viewport_rect().size
+	return Vector2(s.x / 2.0, s.y * 0.6)
 
 func _draw() -> void:
-	var size := get_viewport_rect().size
-	var off := Vector2.ZERO
-	if shake > 0.0:
-		off = Vector2(randi_range(-2, 2), randi_range(-2, 2)) * shake
-	draw_set_transform(off)
-
-	# Sfondo a bande (sfumatura "a pixel")
-	var bands := 12
-	for i in bands:
-		var t := float(i) / (bands - 1)
-		var y0 := floorf(size.y * i / bands)
-		var y1 := floorf(size.y * (i + 1) / bands)
-		draw_rect(Rect2(-4, y0, size.x + 8, y1 - y0 + 1), BG_TOP.lerp(BG_BOTTOM, t))
-
-	# Bagliore della forgia dietro l'incudine
-	var c := _anvil_top_center()
-	var glow := 0.25 + 0.05 * sin(time * 3.0) + strike * 0.35
-	for r in [70, 52, 36]:
-		draw_circle(c + Vector2(0, 10), r, Color(ORANGE, glow * (36.0 / r) * 0.5))
-
-	# Braci
+	var s := get_viewport_rect().size
+	# sfondo: sfumatura viola scura come Braceforte 2
+	var top := Color("2b2350")
+	var bottom := Color("0a0816")
+	for i in 24:
+		var t := i / 23.0
+		draw_rect(Rect2(0, s.y * i / 24.0, s.x, s.y / 24.0 + 1), top.lerp(bottom, t))
+	var c := _anvil_pos()
+	Art.glow(self, c, 120 + 20 * strike, Color(1, 0.5, 0.2, 0.35 + 0.05 * sin(time * 3.0) + strike * 0.3))
 	for e in embers:
-		var col := ORANGE.lerp(YELLOW, e.life)
-		col.a = clampf(e.pos.y / size.y, 0.15, 1.0)
-		draw_rect(Rect2(floorf(e.pos.x), floorf(e.pos.y), e.size, e.size), col)
-
+		var a: float = clampf(e.pos.y / s.y, 0.2, 1.0)
+		Art.glow(self, e.pos, e.r * 4, Color(1, 0.6, 0.2, 0.4 * a))
+		draw_circle(e.pos, e.r, Color(1, 0.85, 0.5, a))
 	_draw_anvil(c)
-	_draw_hammer(c)
+	for p in sparks:
+		Art.glow(self, p.pos, 5, Color(1, 0.7, 0.2, 0.7))
+		draw_circle(p.pos, 1.2, Color("fff0b0"))
+	# titolo
+	var ty := s.y * 0.17
+	Art.glow(self, Vector2(s.x / 2.0, ty + 18), 110, Color(1, 0.45, 0.1, 0.25))
+	_title_text("ASHSMITH", s.x / 2.0, ty)
+	PixelFont.draw_centered(self, "La forgia nella cenere", s.x / 2.0, ty + 44, 2, Color("ffd8a0"), Color(0, 0, 0, 0.5))
+	if fmod(time, 1.2) < 0.85:
+		PixelFont.draw_centered(self, "Tocca per iniziare", s.x / 2.0, s.y * 0.82, 2, Color.WHITE, Color(0, 0, 0, 0.6))
+	PixelFont.draw_text(self, VERSION_TEXT, Vector2(6, s.y - 14), 1, Color(1, 1, 1, 0.35))
 
-	# Scintille
-	for s in sparks:
-		draw_rect(Rect2(floorf(s.pos.x), floorf(s.pos.y), 2, 2), s.col)
-
-	# Titolo
-	var title_y := floorf(size.y * 0.20)
-	var flicker := 0.9 + 0.1 * sin(time * 7.0) + strike * 0.2
-	PixelFont.draw_centered(self, "ASHSMITH", size.x / 2.0, title_y, 4, ORANGE.lerp(YELLOW, clampf(flicker - 0.9, 0.0, 1.0) * 3.0), DARK)
-	PixelFont.draw_centered(self, "LA FORGIA NELLA CENERE", size.x / 2.0, title_y + 40, 1, Color("c9a27a"))
-
-	# Invito a toccare (lampeggia)
-	if fmod(time, 1.2) < 0.8:
-		PixelFont.draw_centered(self, "TOCCA PER INIZIARE", size.x / 2.0, floorf(size.y * 0.80), 2, Color.WHITE, DARK)
-	if hits > 0:
-		PixelFont.draw_centered(self, "COLPI: %d" % hits, size.x / 2.0, floorf(size.y * 0.80) + 24, 1, YELLOW)
-
-	draw_set_transform(Vector2.ZERO)
-	PixelFont.draw_text(self, VERSION_TEXT, Vector2(4, size.y - 11), 1, Color("6e5a55"))
+func _title_text(t: String, cx: float, y: float) -> void:
+	var f := PixelFont.bold()
+	var size := 40
+	var w := f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	var base := Vector2(cx - w / 2.0, y + f.get_ascent(size))
+	draw_string_outline(f, base + Vector2(0, 3), t, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 8, Art.DARK)
+	draw_string_outline(f, base, t, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 6, Art.DARK)
+	draw_string(f, base, t, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color("ffb03a"))
+	draw_string(f, base - Vector2(0, 1), t.substr(0, t.length()), HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(1, 0.85, 0.4, 0.35))
 
 func _draw_anvil(c: Vector2) -> void:
-	# c = centro della faccia superiore
-	var x := c.x
-	var y := c.y
-	# faccia superiore + corno a sinistra
-	draw_rect(Rect2(x - 30, y, 52, 8), STEEL)
-	draw_rect(Rect2(x - 30, y, 52, 2), STEEL_LIGHT)
-	draw_rect(Rect2(x - 44, y + 2, 14, 4), STEEL)
-	draw_rect(Rect2(x - 50, y + 3, 6, 2), STEEL)
-	draw_rect(Rect2(x + 22, y, 6, 6), STEEL_DARK)
-	# collo
-	draw_rect(Rect2(x - 14, y + 8, 28, 10), STEEL_DARK)
-	# base
-	draw_rect(Rect2(x - 24, y + 18, 48, 8), STEEL)
-	draw_rect(Rect2(x - 24, y + 18, 48, 2), STEEL_LIGHT)
-	# ceppo di legno
-	draw_rect(Rect2(x - 20, y + 26, 40, 20), WOOD)
-	draw_rect(Rect2(x - 20, y + 26, 40, 2), WOOD.lightened(0.2))
-	draw_rect(Rect2(x - 8, y + 30, 2, 14), WOOD.darkened(0.3))
-	draw_rect(Rect2(x + 8, y + 32, 2, 12), WOOD.darkened(0.3))
-	# lama incandescente sulla faccia
-	var hot := ORANGE.lerp(YELLOW, 0.3 + 0.3 * sin(time * 4.0) + strike * 0.5)
-	draw_rect(Rect2(x - 22, y - 3, 34, 3), hot)
-	draw_rect(Rect2(x + 12, y - 2, 8, 2), STEEL_DARK)
-
-func _draw_hammer(c: Vector2) -> void:
-	# il martello sta alzato e scende quando si tocca
+	var o := Art.DARK
+	# ceppo
+	draw_rect(Rect2(c.x - 26, c.y + 22, 52, 30), o)
+	draw_rect(Rect2(c.x - 24, c.y + 24, 48, 26), Color("6b3d22"))
+	draw_rect(Rect2(c.x - 24, c.y + 24, 48, 5), Color("8a5a32"))
+	# incudine (forma con contorno)
+	var pts := PackedVector2Array([
+		Vector2(-46, -4), Vector2(-30, -10), Vector2(30, -10), Vector2(34, -4), Vector2(34, 4), Vector2(16, 8),
+		Vector2(20, 22), Vector2(-20, 22), Vector2(-16, 8), Vector2(-30, 4), Vector2(-46, 0)])
+	for i in pts.size():
+		pts[i] += c
+	var outline := pts.duplicate()
+	outline.append(pts[0])
+	draw_colored_polygon(pts, Color("5a5f7a"))
+	draw_polyline(outline, o, 3.0, true)
+	draw_rect(Rect2(c.x - 30, c.y - 9, 62, 4), Color("8a90b0"))
+	# lama incandescente
+	var hot := Color("ff7a1a").lerp(Color("ffe14a"), 0.4 + 0.3 * sin(time * 4.0) + strike * 0.4)
+	Art.glow(self, c + Vector2(-4, -14), 30, Color(hot, 0.6))
+	Art.rbox(self, Rect2(c.x - 26, c.y - 16, 44, 6), hot, o, 3, 2)
+	# martello
 	var lift := 26.0 * (1.0 - strike) if strike > 0.0 else 26.0 + 2.0 * sin(time * 2.0)
-	var hx := c.x + 4
-	var hy := c.y - 8 - lift
-	draw_rect(Rect2(hx, hy - 2, 30, 4), WOOD)                 # manico
-	draw_rect(Rect2(hx - 10, hy - 8, 12, 14), STEEL)          # testa
-	draw_rect(Rect2(hx - 10, hy - 8, 12, 2), STEEL_LIGHT)
+	var hp := Vector2(c.x + 8, c.y - 20 - lift)
+	Art.rbox(self, Rect2(hp.x, hp.y - 2, 38, 5), Color("8a5a32"), o, 2, 2)
+	Art.rbox(self, Rect2(hp.x - 12, hp.y - 9, 16, 18), Color("5a5f7a"), o, 3, 2)

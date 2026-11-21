@@ -56,7 +56,7 @@ static func slots_info(slots: Array, recipes: Array = []) -> Array:
 const WEAPONS := {
 	"sword": {
 		"name": "SPADA", "desc": ["FENDENTI VICINI", "DISTRUGGONO I COLPI"],
-		"dmg": 16.0, "rate": 0.42, "speed": 220.0, "range": 95.0, "size": 7.0, "area": 0.0,
+		"dmg": 16.0, "rate": 0.42, "speed": 220.0, "range": 95.0, "size": 9.0, "area": 0.0,
 		"color": Color("d8dce8"),
 	},
 	"bow": {
@@ -82,12 +82,12 @@ const FAMILIES := {
 }
 
 const ENEMIES := {
-	"zombie":   {"fam": "undead", "hp": 34.0, "speed": 26.0, "size": 12, "dmg": 10, "sparks": 3, "kind": "melee"},
-	"archer":   {"fam": "undead", "hp": 26.0, "speed": 18.0, "size": 12, "dmg": 9, "sparks": 4, "kind": "shooter"},
-	"golem":    {"fam": "golem", "hp": 130.0, "speed": 20.0, "size": 20, "dmg": 22, "sparks": 8, "kind": "slammer"},
-	"pebble":   {"fam": "golem", "hp": 55.0, "speed": 30.0, "size": 13, "dmg": 9, "sparks": 4, "kind": "shooter"},
-	"imp":      {"fam": "ember", "hp": 24.0, "speed": 52.0, "size": 11, "dmg": 8, "sparks": 3, "kind": "melee"},
-	"spitter":  {"fam": "ember", "hp": 30.0, "speed": 16.0, "size": 13, "dmg": 9, "sparks": 4, "kind": "spread"},
+	"zombie":   {"fam": "undead", "hp": 34.0, "speed": 26.0, "size": 17, "dmg": 10, "sparks": 3, "kind": "melee"},
+	"archer":   {"fam": "undead", "hp": 26.0, "speed": 18.0, "size": 17, "dmg": 9, "sparks": 4, "kind": "shooter"},
+	"golem":    {"fam": "golem", "hp": 130.0, "speed": 20.0, "size": 28, "dmg": 22, "sparks": 8, "kind": "slammer"},
+	"pebble":   {"fam": "golem", "hp": 55.0, "speed": 30.0, "size": 18, "dmg": 9, "sparks": 4, "kind": "shooter"},
+	"imp":      {"fam": "ember", "hp": 24.0, "speed": 52.0, "size": 16, "dmg": 8, "sparks": 3, "kind": "melee"},
+	"spitter":  {"fam": "ember", "hp": 30.0, "speed": 16.0, "size": 18, "dmg": 9, "sparks": 4, "kind": "spread"},
 }
 
 ## Danno moltiplicato in base agli elementi dell'arma e alla famiglia

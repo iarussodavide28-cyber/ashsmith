@@ -3,7 +3,7 @@ extends Node2D
 
 const TOP_H := 24.0
 const TAB_H := 44.0
-const BG := Color("1a0f12")
+const BG := Color("140f2a")
 const TABS := [["equip", "EQUIP", "bag"], ["play", "GIOCA", "play"], ["shop", "NEGOZIO", "shop"]]
 
 var tab := "play"
@@ -216,11 +216,12 @@ func _buy_offer(i: int) -> void:
 func _draw() -> void:
 	var s := _size()
 	rects.clear()
-	draw_rect(Rect2(Vector2.ZERO, s), BG)
-	for i in 20:
+	for i in 24:
+		draw_rect(Rect2(0, s.y * i / 24.0, s.x, s.y / 24.0 + 1), Color("2b2350").lerp(Color("0a0816"), i / 23.0))
+	for i in 18:
 		var x := fmod(i * 53.0 + sin(i) * 30.0, s.x)
 		var y := s.y - fmod(time * (8.0 + i % 5 * 3) + i * 71.0, s.y)
-		draw_rect(Rect2(floorf(x), floorf(y), 1, 1), Color(Art.SPARK, 0.35))
+		Art.glow(self, Vector2(x, y), 4, Color(1, 0.6, 0.25, 0.4))
 	match tab:
 		"play": _draw_play()
 		"equip": _draw_equip()
@@ -241,85 +242,119 @@ func _draw() -> void:
 
 func _draw_top() -> void:
 	var s := _size()
-	draw_rect(Rect2(0, 0, s.x, TOP_H), Color("0e0809"))
-	var x := 5.0
-	x += Art.counter(self, "gold", Save.gold, Vector2(x, 8), Art.GOLD)
-	x += Art.counter(self, "gem", Save.gems, Vector2(x, 8), Art.GEM)
-	x = s.x - 5
-	for m in ["ember", "stone", "bone"]:
+	draw_rect(Rect2(0, 0, s.x, TOP_H), Color("1a1438"))
+	draw_rect(Rect2(0, TOP_H - 1, s.x, 1), Color(1, 1, 1, 0.06))
+	var x := 8.0
+	x += Art.counter(self, "gold", Save.gold, Vector2(x, 7), Art.GOLD)
+	x += Art.counter(self, "gem", Save.gems, Vector2(x, 7), Art.GEM)
+	# materiali
+	x += 2
+	for m in ["bone", "stone", "ember"]:
 		var md: Dictionary = Gear.MATERIALS[m]
+		Art.icon(self, md.icon, Vector2(x, 6), 1.4, md.color)
 		var t := str(Save.materials[m])
-		x -= PixelFont.text_width(t, 1)
-		PixelFont.draw_text(self, t, Vector2(x, 8), 1, Color.WHITE)
-		x -= 10
-		Art.icon(self, md.icon, Vector2(x, 8), 1, md.color)
-		x -= 6
+		PixelFont.draw_text(self, t, Vector2(x + 12, 7), 1, Color.WHITE)
+		x += 16 + PixelFont.text_width(t, 1)
+	# potere
+	var pt := "Potere %d" % Save.gear_power()
+	var pw := PixelFont.text_width(pt, 1) + 14
+	var pr := Rect2(s.x - pw - 6, 4, pw, 16)
+	Art.rbox(self, pr, Color("ff6a4a"), Color(0, 0, 0, 0), 8)
+	PixelFont.draw_centered(self, pt, pr.get_center().x, pr.position.y + 3, 1, Color.WHITE)
 
 func _draw_tabs() -> void:
 	var s := _size()
 	var y0 := s.y - TAB_H
-	draw_rect(Rect2(0, y0, s.x, TAB_H), Color("0e0809"))
-	draw_rect(Rect2(0, y0, s.x, 1), Color("3a2a2a"))
+	draw_rect(Rect2(0, y0, s.x, TAB_H), Color("120d26"))
+	draw_rect(Rect2(0, y0, s.x, 1), Color(1, 1, 1, 0.1))
 	var w := s.x / TABS.size()
 	for i in TABS.size():
 		var t: Array = TABS[i]
-		var r := Rect2(i * w + 3, y0 + 4, w - 6, TAB_H - 8)
+		var r := Rect2(i * w + 4, y0 + 4, w - 8, TAB_H - 8)
 		rects["tab_" + t[0]] = r
 		var on: bool = tab == t[0]
 		if on:
-			Art.panel(self, r, Color("3a2420"), Art.SPARK)
-		Art.icon(self, t[2], Vector2(r.get_center().x - 7, r.position.y + 4), 2, Art.GOLD if on else Art.TEXT_DIM)
-		PixelFont.draw_centered(self, t[1], r.get_center().x, r.position.y + 22, 1, Color.WHITE if on else Art.TEXT_DIM)
+			Art.rbox(self, r, Color("3d2d78"), Color(1, 0.83, 0.42, 0.35), 10, 1)
+		var col := Color("ffd36b") if on else Color("a99cc9")
+		Art.icon(self, t[2], Vector2(r.get_center().x - 7, r.position.y + 4), 2.0, col)
+		PixelFont.draw_centered(self, PixelFont.nice(t[1]) if t[1] != "EQUIP" else "Eroe", r.get_center().x, r.position.y + 21, 1, col)
 
-# ---------------------------------------------------------------------
-#  GIOCA
-# ---------------------------------------------------------------------
 func _draw_play() -> void:
 	var s := _size()
 	var c := _content_rect()
-	var y := c.position.y + 14
-	PixelFont.draw_centered(self, "ASHSMITH", s.x / 2.0, y, 3, Art.SPARK, Art.DARK)
-	y += 32
-	var card := Rect2(14, y, s.x - 28, 182)
-	Art.panel(self, card, Color("26181a"), Art.SPARK)
-	PixelFont.draw_centered(self, "CAPITOLO 1", s.x / 2.0, card.position.y + 10, 2, Color.WHITE, Art.DARK)
-	PixelFont.draw_centered(self, "LA FONDERIA CADUTA", s.x / 2.0, card.position.y + 30, 1, Color("c9a27a"))
-	# disegno: incudine con braci
-	var ac := Vector2(s.x / 2.0, card.position.y + 82)
-	draw_circle(ac, 30, Color(1, 0.5, 0.2, 0.15 + 0.05 * sin(time * 3.0)))
-	var steel := Color("5b5f6e")
-	draw_rect(Rect2(ac.x - 20, ac.y - 6, 36, 7), steel)
-	draw_rect(Rect2(ac.x - 20, ac.y - 6, 36, 2), Color("8a90a3"))
-	draw_rect(Rect2(ac.x - 30, ac.y - 4, 10, 3), steel)
-	draw_rect(Rect2(ac.x - 8, ac.y + 1, 16, 8), Color("33353f"))
-	draw_rect(Rect2(ac.x - 16, ac.y + 9, 32, 6), steel)
-	draw_rect(Rect2(ac.x - 16, ac.y - 9, 24, 3), Art.SPARK.lerp(Art.GOLD, 0.5 + 0.5 * sin(time * 4.0)))
-	for i in 8:
-		var py := ac.y - 12 - fmod(time * 20.0 + i * 9.0, 40.0)
-		draw_rect(Rect2(ac.x - 14 + i * 4, py, 1, 1), Art.GOLD)
-	var info := "12 STANZE  -  MINI-BOSS  -  BOSS"
-	PixelFont.draw_centered(self, info, s.x / 2.0, card.position.y + 112, 1, Art.TEXT_DIM)
-	PixelFont.draw_centered(self, "RECORD: STANZA %d/12   VITTORIE: %d" % [Save.best_room, Save.wins], s.x / 2.0, card.position.y + 126, 1, Color.WHITE)
-	var pr := Rect2(card.position.x + 30, card.end.y - 34, card.size.x - 60, 26)
+	# anteprima della stanza (come la schermata di Braceforte 2)
+	var room := Rect2(10, c.position.y + 8, s.x - 20, c.size.y - 16)
+	Art.rbox(self, room, Color("2a201f"), Art.DARK, 6, 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 77
+	var ts := 19.0
+	var top := 24.0
+	for y in int((room.size.y - top) / ts) + 1:
+		for x in int(room.size.x / ts) + 1:
+			var t := Rect2(room.position + Vector2(x * ts + 3, top + y * ts + 1), Vector2(ts - 2, ts - 2)).intersection(room.grow(-3))
+			if t.size.x <= 0 or t.size.y <= 0:
+				continue
+			var base := Color("4a3c3a").lerp(Color("54443f"), rng.randf())
+			draw_rect(t, base)
+			draw_rect(Rect2(t.position, Vector2(t.size.x, 1.5)), base.lightened(0.12))
+	var wall := Rect2(room.position.x + 2, room.position.y + 2, room.size.x - 4, top)
+	draw_rect(wall, Color("4e3b38"))
+	for row in 3:
+		for k in 14:
+			var bx := wall.position.x + k * 22 - (0 if row % 2 == 0 else 11)
+			draw_rect(Rect2(bx, wall.position.y + row * 8, 1, 8).intersection(wall), Color(0, 0, 0, 0.3))
+		draw_rect(Rect2(wall.position.x, wall.position.y + row * 8, wall.size.x, 1), Color(0, 0, 0, 0.3))
+	for f in [0.15, 0.35, 0.65, 0.85]:
+		var tp := Vector2(wall.position.x + wall.size.x * f, wall.position.y + 11)
+		Art.glow(self, tp, 18, Color(1, 0.6, 0.25, 0.5))
+		draw_circle(tp, 2.5, Color("ffb03a"))
+	var gc := Vector2(s.x / 2.0, wall.position.y + 12)
+	draw_circle(gc, 18, Art.DARK)
+	draw_circle(gc, 15, Color("120a0a"))
+	draw_rect(Rect2(gc.x - 15, gc.y, 30, wall.end.y - gc.y), Color("120a0a"))
+	for i in 5:
+		draw_line(Vector2(gc.x - 12 + i * 6, gc.y - 10), Vector2(gc.x - 12 + i * 6, wall.end.y), Color("6a6070"), 2.0, true)
+	# eroe al centro
+	var hp := Vector2(s.x / 2.0, room.position.y + room.size.y * 0.45)
+	_mini_hero(hp, 1.6)
+	# testo e pulsante in basso, su una sfumatura scura
+	var fy := room.end.y - 150
+	for i in 10:
+		draw_rect(Rect2(room.position.x + 2, fy + i * 15, room.size.x - 4, 15), Color(0.04, 0.03, 0.09, 0.08 * i))
+	PixelFont.draw_centered(self, "Capitolo 1", s.x / 2.0, fy + 20, 3, Color.WHITE, Art.DARK)
+	PixelFont.draw_centered(self, "La Fonderia caduta", s.x / 2.0, fy + 48, 1, Color("c9b8ff"))
+	var rec := "Record: stanza %d/12 · vittorie %d" % [Save.best_room, Save.wins]
+	PixelFont.draw_centered(self, rec, s.x / 2.0, fy + 64, 1, Color("ffd36b"))
+	var pr := Rect2(s.x / 2.0 - 100, fy + 84, 200, 46)
 	rects["play"] = pr
-	Art.button(self, pr, "GIOCA", Color("e0661f"), true, 2)
-	y = card.end.y + 12
-	# armi e potere
+	Art.glow(self, pr.get_center(), 110, Color(1, 0.5, 0.1, 0.25))
+	Art.button(self, pr, "", Color("ff8a1a"), true)
+	PixelFont.draw_centered(self, "COMBATTI!", pr.get_center().x, pr.position.y + 6, 3, Color.WHITE, Color(0.5, 0.2, 0, 0.5))
 	var w := Save.run_weapons()
-	PixelFont.draw_centered(self, "ARMI: %s + %s" % [Data.WEAPONS[w[0]].name, Data.WEAPONS[w[1]].name], s.x / 2.0, y, 1, Color.WHITE)
-	PixelFont.draw_centered(self, "POTERE EQUIPAGGIAMENTO: %d" % Save.gear_power(), s.x / 2.0, y + 12, 1, Art.GOLD)
-	PixelFont.draw_centered(self, "CAMBIA ARMI E PEZZI IN EQUIP", s.x / 2.0, y + 24, 1, Art.TEXT_DIM)
-	y += 44
-	var lock := Rect2(14, y, s.x - 28, 40)
-	if lock.end.y < c.end.y - 4:
-		Art.panel(self, lock, Color("1a1214"), Color("3a2a2a"))
-		Art.icon(self, "lock", Vector2(lock.position.x + 10, lock.position.y + 12), 2, Art.TEXT_DIM)
-		PixelFont.draw_text(self, "CAPITOLO 2", lock.position + Vector2(32, 9), 1, Art.TEXT_DIM)
-		PixelFont.draw_text(self, "IN ARRIVO", lock.position + Vector2(32, 22), 1, Color("6e5a55"))
+	PixelFont.draw_centered(self, "12 stanze + boss · %s e %s" % [PixelFont.nice(Data.WEAPONS[w[0]].name), PixelFont.nice(Data.WEAPONS[w[1]].name).to_lower()], pr.get_center().x, pr.position.y + 30, 1, Color(1, 1, 1, 0.9))
 
-# ---------------------------------------------------------------------
-#  EQUIPAGGIAMENTO
-# ---------------------------------------------------------------------
+func _mini_hero(c: Vector2, k: float) -> void:
+	var r := 8.5 * k
+	draw_set_transform(c + Vector2(0, r * 0.9), 0, Vector2(1, 0.38))
+	draw_circle(Vector2.ZERO, r, Color(0, 0, 0, 0.35))
+	draw_set_transform(Vector2.ZERO)
+	draw_circle(c + Vector2(0, 2 * k), r + 1.6 * k, Art.DARK)
+	draw_circle(c + Vector2(0, 2 * k), r, Color("3d3a5c"))
+	draw_circle(c + Vector2(0, (r * 0.5 + 2) * 1.0), 1.6 * k, Art.GOLD)
+	var hc := c + Vector2(0, -r * 0.35)
+	draw_circle(hc, r * 0.82 + 1.6 * k, Art.DARK)
+	draw_circle(hc, r * 0.82, Color("5a5f7a"))
+	draw_circle(hc + Vector2(-r * 0.25, -r * 0.3), r * 0.25, Color(1, 1, 1, 0.35))
+	Art.rbox(self, Rect2(hc.x - r * 0.6, hc.y + 2 * k, r * 1.2, 4 * k), Art.DARK, Color(0, 0, 0, 0), 3)
+	draw_circle(hc + Vector2(-2.2, 3) * k, 0.9 * k, Color("ffd36b"))
+	draw_circle(hc + Vector2(2.2, 3) * k, 0.9 * k, Color("ffd36b"))
+	var fl := sin(time * 10.0)
+	var pts := PackedVector2Array([hc + Vector2(-1.5 * k, -r * 0.75), hc + Vector2(1 * k, -r * 1.55 + fl), hc + Vector2(4.5 * k, -r * 1.1 - fl), hc + Vector2(2.5 * k, -r * 0.7)])
+	var q := pts.duplicate()
+	q.append(pts[0])
+	draw_polyline(q, Art.DARK, 2.0, true)
+	draw_colored_polygon(pts, Color("ff5a2a"))
+
 func _slot_rects() -> Dictionary:
 	var s := _size()
 	var y0 := TOP_H + 26
@@ -343,15 +378,8 @@ func _draw_equip() -> void:
 	Art.button(self, rr, "RICETTE", Color("7a4ad0"))
 	# eroe al centro
 	var hc := Vector2(s.x / 2.0, TOP_H + 70)
-	draw_circle(hc, 34, Color(1, 0.5, 0.2, 0.08))
-	var hs := 30.0
-	var hp := hc - Vector2(hs, hs) / 2.0
-	draw_rect(Rect2(hp + Vector2(2, hs - 2), Vector2(hs - 4, 5)), Color(0, 0, 0, 0.4))
-	draw_rect(Rect2(hp, Vector2(hs, hs)), Color("b8541a"))
-	draw_rect(Rect2(hp + Vector2(2, 2), Vector2(hs - 4, hs - 6)), Color("ff8a2b"))
-	draw_rect(Rect2(hp + Vector2(2, 2), Vector2(hs - 4, 4)), Color("ffd25a"))
-	draw_rect(Rect2(hc.x - 7, hc.y - 2, 4, 4), Art.DARK)
-	draw_rect(Rect2(hc.x + 3, hc.y - 2, 4, 4), Art.DARK)
+	Art.glow(self, hc, 46, Color(1, 0.5, 0.2, 0.25))
+	_mini_hero(hc + Vector2(0, 2), 1.7)
 	PixelFont.draw_centered(self, "LA FABBRA", hc.x, hc.y + 24, 1, Color.WHITE)
 	# statistiche
 	var b := Save.bonuses()

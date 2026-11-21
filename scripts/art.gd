@@ -1,76 +1,220 @@
 class_name Art
-## Disegni pixel fatti a mano (icone, pulsanti) usati da tutte le schermate.
+## Disegni del gioco nello stile di Braceforte 2: forme tonde con contorno scuro,
+## colori pieni, bagliori, pannelli e pulsanti arrotondati.
 
-const DARK := Color("120a0c")
-const PANEL := Color("231719")
-const PANEL_EDGE := Color("5a4040")
-const TEXT_DIM := Color("9a8580")
-const GOLD := Color("ffd25a")
-const GEM := Color("6fe3ff")
-const SPARK := Color("ff8a2b")
-const HP := Color("ff4a5a")
+const DARK := Color("120c24")          # contorno di tutto
+const PANEL := Color("231c42")
+const PANEL_EDGE := Color("4a3f7a")
+const TEXT_DIM := Color("a99cc9")
+const GOLD := Color("ffc531")
+const GEM := Color("5ab4ff")
+const SPARK := Color("ff8a3d")
+const HP := Color("ff3d5a")
+const GREEN := Color("4fdc8a")
 
-const ICONS := {
-	"fire": ["0001000","0011000","0011100","0111110","1111110","1110111","0111110"],
-	"ice": ["0001000","1001001","0101010","0011100","0101010","1001001","0001000"],
-	"thunder": ["0000110","0001100","0011000","0111110","0001100","0011000","0110000"],
-	"poison": ["0001000","0011100","0011100","0111110","0111110","0111110","0011100"],
-	"spark": ["0001000","0001000","0011100","1111111","0011100","0001000","0001000"],
-	"gold": ["0011100","0111110","1110111","1110111","1110111","0111110","0011100"],
-	"gem": ["0111110","1101011","1111111","0111110","0011100","0001000","0000000"],
-	"heart": ["0110110","1111111","1111111","1111111","0111110","0011100","0001000"],
-	"skull": ["0111110","1111111","1001001","1111111","0110110","0111110","0000000"],
-	"question": ["0111110","1100011","0000110","0001100","0001100","0000000","0001100"],
-	"helmet": ["0011100","0111110","1111111","1101011","1101011","1100011","0000000"],
-	"armor": ["1100011","1111111","1111111","0111110","0111110","0111110","0011100"],
-	"gloves": ["0101010","0101010","0111110","1111110","0111110","0111100","0011100"],
-	"boots": ["0011100","0011100","0011100","0011100","0011110","1111111","1111111"],
-	"ring": ["0001000","0011100","0001000","0110110","1000001","1000001","0111110"],
-	"rock": ["0000000","0011100","0111110","1111011","1110111","1111111","0111110"],
-	"lock": ["0011100","0100010","0100010","1111111","1110111","1110111","1111111"],
-	"chest": ["0111110","1000001","1111111","1110111","1111111","1000001","1111111"],
-	"book": ["1111110","1000011","1011011","1000011","1011011","1000011","1111110"],
-	"play": ["1000000","1100000","1110000","1111000","1110000","1100000","1000000"],
-	"bag": ["0011100","0100010","1111111","1111111","1101011","1111111","0111110"],
-	"shop": ["1111111","1010101","1111111","0000000","1011101","1011101","1111111"],
-	"sword": ["0000011","0000111","0001110","1011100","0111000","0110000","1001000"],
-	"bow": ["0111000","1000100","1000010","1111111","1000010","1000100","0111000"],
-	"staff": ["0001110","0001110","0001110","0010000","0100000","1000000","0000000"],
-}
+static var _boxes := {}
+static var _glow: Texture2D
 
-static func icon(canvas: CanvasItem, name: String, pos: Vector2, scale: int, color: Color) -> void:
-	var g: Array = ICONS.get(name, ICONS["question"])
-	for row in g.size():
-		var line: String = g[row]
-		for col in line.length():
-			if line[col] == "1":
-				canvas.draw_rect(Rect2(pos.x + col * scale, pos.y + row * scale, scale, scale), color)
+# ---------------------------------------------------------------------
+#  Base
+# ---------------------------------------------------------------------
+static func glow_tex() -> Texture2D:
+	if _glow == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		g.add_point(0.35, Color(1, 1, 1, 0.45))
+		var t := GradientTexture2D.new()
+		t.gradient = g
+		t.fill = GradientTexture2D.FILL_RADIAL
+		t.fill_from = Vector2(0.5, 0.5)
+		t.fill_to = Vector2(1.0, 0.5)
+		t.width = 64
+		t.height = 64
+		_glow = t
+	return _glow
 
-static func el_icon(canvas: CanvasItem, el: String, pos: Vector2, scale: int) -> void:
+## Bagliore morbido (luce attorno a fuochi, colpi, torce)
+static func glow(canvas: CanvasItem, pos: Vector2, radius: float, color: Color) -> void:
+	canvas.draw_texture_rect(glow_tex(), Rect2(pos - Vector2(radius, radius), Vector2(radius, radius) * 2.0), false, color)
+
+static func box(fill: Color, edge: Color, radius: int, border: int = 2) -> StyleBoxFlat:
+	var key := "%s|%s|%d|%d" % [fill.to_html(), edge.to_html(), radius, border]
+	if _boxes.has(key):
+		return _boxes[key]
+	var b := StyleBoxFlat.new()
+	b.bg_color = fill
+	b.border_color = edge
+	b.set_border_width_all(border)
+	b.set_corner_radius_all(radius)
+	b.anti_aliasing = true
+	b.corner_detail = 6
+	_boxes[key] = b
+	return b
+
+static func rbox(canvas: CanvasItem, r: Rect2, fill: Color, edge: Color = Color(0, 0, 0, 0), radius: int = 6, border: int = 2) -> void:
+	if edge.a <= 0.0:
+		border = 0
+	canvas.draw_style_box(box(fill, edge, radius, border), r)
+
+## Pannello scuro arrotondato (stile carte di Braceforte 2)
+static func panel(canvas: CanvasItem, r: Rect2, fill: Color = PANEL, edge: Color = PANEL_EDGE) -> void:
+	rbox(canvas, Rect2(r.position + Vector2(0, 2), r.size), Color(0, 0, 0, 0.3), Color(0, 0, 0, 0), 8)
+	rbox(canvas, r, fill, edge, 8, 2)
+
+## Pulsante con sfumatura e "spessore" sotto, come il COMBATTI! di Braceforte 2
+static func button(canvas: CanvasItem, r: Rect2, text: String, color: Color, enabled: bool = true, scale: int = 1) -> void:
+	var c := color if enabled else Color("4a4466")
+	var rad := int(minf(10.0, r.size.y / 2.5))
+	rbox(canvas, Rect2(r.position + Vector2(0, 3), r.size), c.darkened(0.45), Color(0, 0, 0, 0), rad)
+	rbox(canvas, r, c, Color(0, 0, 0, 0), rad)
+	rbox(canvas, Rect2(r.position + Vector2(2, 1), Vector2(r.size.x - 4, r.size.y * 0.48)), c.lightened(0.18), Color(0, 0, 0, 0), rad - 1)
+	if text != "":
+		var size := PixelFont.px(scale)
+		var ty := r.position.y + (r.size.y - size) / 2.0 - 1
+		PixelFont.draw_centered(canvas, text, r.get_center().x, ty, scale, Color.WHITE if enabled else TEXT_DIM, Color(0, 0, 0, 0.35))
+
+## Pillola con icona e numero (barra in alto)
+static func counter(canvas: CanvasItem, icon_name: String, value: int, pos: Vector2, color: Color) -> float:
+	var t := str(value)
+	var w := 22.0 + PixelFont.text_width(t, 1)
+	rbox(canvas, Rect2(pos.x - 3, pos.y - 3, w, 15), Color(0, 0, 0, 0.38), Color(1, 1, 1, 0.1), 8, 1)
+	icon(canvas, icon_name, pos + Vector2(0, -1), 1.6, color)
+	PixelFont.draw_text(canvas, t, pos + Vector2(15, 0), 1, Color.WHITE)
+	return w + 4
+
+# ---------------------------------------------------------------------
+#  Icone disegnate (scala 1 = circa 7 pixel)
+# ---------------------------------------------------------------------
+static func _poly(canvas: CanvasItem, pts: Array, o: Vector2, k: float, col: Color, outline: bool = true) -> void:
+	var p := PackedVector2Array()
+	for v in pts:
+		p.append(o + v * k)
+	if outline:
+		var q := p.duplicate()
+		q.append(p[0])
+		canvas.draw_polyline(q, DARK, maxf(1.2, k * 0.9), true)
+	canvas.draw_colored_polygon(p, col)
+
+static func icon(canvas: CanvasItem, name: String, pos: Vector2, scale: float, color: Color) -> void:
+	var k := scale            # 1 unità = 1 "pixel" della vecchia icona 7x7
+	var o := pos
+	var c := pos + Vector2(3.5, 3.5) * k
+	var lw := maxf(1.0, k * 0.8)
+	match name:
+		"fire":
+			_poly(canvas, [Vector2(3.5, 0), Vector2(5.2, 2.4), Vector2(6.4, 4.4), Vector2(5.6, 6.4), Vector2(3.5, 7), Vector2(1.4, 6.4), Vector2(0.6, 4.4), Vector2(1.8, 2.8), Vector2(2.6, 3.8)], o, k, color)
+			_poly(canvas, [Vector2(3.5, 3.4), Vector2(4.6, 5.0), Vector2(3.5, 6.4), Vector2(2.4, 5.0)], o, k, Color("ffe14a"), false)
+		"ice":
+			for i in 3:
+				var a := PI / 3.0 * i
+				var d := Vector2.from_angle(a) * 3.3 * k
+				canvas.draw_line(c - d, c + d, DARK, lw + 1.6, true)
+			for i in 3:
+				var a := PI / 3.0 * i
+				var d := Vector2.from_angle(a) * 3.3 * k
+				canvas.draw_line(c - d, c + d, color, lw, true)
+			canvas.draw_circle(c, 1.0 * k, Color.WHITE)
+		"thunder":
+			_poly(canvas, [Vector2(4.4, 0), Vector2(1.2, 4.0), Vector2(3.2, 4.0), Vector2(2.2, 7), Vector2(5.8, 2.8), Vector2(3.8, 2.8)], o, k, color)
+		"poison":
+			_poly(canvas, [Vector2(3.5, 0), Vector2(5.6, 3.4), Vector2(6, 4.8), Vector2(5, 6.5), Vector2(3.5, 7), Vector2(2, 6.5), Vector2(1, 4.8), Vector2(1.4, 3.4)], o, k, color)
+			canvas.draw_circle(o + Vector2(2.6, 4.6) * k, 0.8 * k, Color(1, 1, 1, 0.7))
+		"spark":
+			_poly(canvas, [Vector2(3.5, 0), Vector2(4.4, 2.6), Vector2(7, 3.5), Vector2(4.4, 4.4), Vector2(3.5, 7), Vector2(2.6, 4.4), Vector2(0, 3.5), Vector2(2.6, 2.6)], o, k, color)
+		"gold":
+			canvas.draw_circle(c, 3.5 * k, DARK)
+			canvas.draw_circle(c, 2.9 * k, Color("c27a00"))
+			canvas.draw_circle(c - Vector2(0.3, 0.3) * k, 2.3 * k, color)
+			canvas.draw_circle(c - Vector2(1, 1) * k, 0.9 * k, Color("fff6b0"))
+		"gem":
+			_poly(canvas, [Vector2(3.5, 0.2), Vector2(7, 2.6), Vector2(3.5, 7), Vector2(0, 2.6)], o, k, color)
+			_poly(canvas, [Vector2(3.5, 0.6), Vector2(5.6, 2.6), Vector2(3.5, 3.4), Vector2(1.4, 2.6)], o, k, Color("a6f4ff"), false)
+		"heart":
+			canvas.draw_circle(o + Vector2(2.1, 2.3) * k, 2.0 * k, color)
+			canvas.draw_circle(o + Vector2(4.9, 2.3) * k, 2.0 * k, color)
+			_poly(canvas, [Vector2(0.2, 2.8), Vector2(6.8, 2.8), Vector2(3.5, 6.8)], o, k, color, false)
+		"skull":
+			canvas.draw_circle(c - Vector2(0, 0.6) * k, 3.3 * k, DARK)
+			canvas.draw_circle(c - Vector2(0, 0.6) * k, 2.8 * k, color)
+			canvas.draw_rect(Rect2(o + Vector2(2, 4.6) * k, Vector2(3, 2) * k), color)
+			canvas.draw_circle(o + Vector2(2.4, 3) * k, 0.8 * k, DARK)
+			canvas.draw_circle(o + Vector2(4.6, 3) * k, 0.8 * k, DARK)
+		"rock":
+			_poly(canvas, [Vector2(1, 2.4), Vector2(3, 0.8), Vector2(5.6, 1.4), Vector2(6.8, 4), Vector2(5.4, 6.4), Vector2(2, 6.6), Vector2(0.2, 4.6)], o, k, color)
+			canvas.draw_line(o + Vector2(3, 2.4) * k, o + Vector2(4, 4) * k, color.darkened(0.4), lw * 0.7, true)
+		"question":
+			canvas.draw_circle(c, 3.5 * k, DARK)
+			canvas.draw_circle(c, 2.9 * k, color.darkened(0.5))
+			PixelFont.draw_centered(canvas, "?", c.x, c.y - 4.5 * k / 1.0, 1, color)
+		"sword":
+			canvas.draw_line(o + Vector2(6.5, 0.5) * k, o + Vector2(1.8, 5.2) * k, DARK, lw + 2.0, true)
+			canvas.draw_line(o + Vector2(6.5, 0.5) * k, o + Vector2(1.8, 5.2) * k, color, lw + 0.6, true)
+			canvas.draw_line(o + Vector2(0.8, 3.6) * k, o + Vector2(3.4, 6.2) * k, Color("8a6a40"), lw + 0.6, true)
+			canvas.draw_line(o + Vector2(1.8, 5.2) * k, o + Vector2(0.4, 6.6) * k, Color("6b3d22"), lw + 0.6, true)
+		"bow":
+			var bc := o + Vector2(1.6, 3.5) * k
+			canvas.draw_arc(bc, 3.3 * k, -1.25, 1.25, 12, DARK, lw + 2.0, true)
+			canvas.draw_arc(bc, 3.3 * k, -1.25, 1.25, 12, color, lw + 0.6, true)
+			var e1 := bc + Vector2.from_angle(-1.25) * 3.3 * k
+			var e2 := bc + Vector2.from_angle(1.25) * 3.3 * k
+			canvas.draw_line(e1, e2, Color(1, 1, 1, 0.85), maxf(1.0, k * 0.35), true)
+		"staff":
+			canvas.draw_line(o + Vector2(5.4, 1.6) * k, o + Vector2(0.8, 6.6) * k, DARK, lw + 2.0, true)
+			canvas.draw_line(o + Vector2(5.4, 1.6) * k, o + Vector2(0.8, 6.6) * k, Color("8a6a40"), lw + 0.6, true)
+			canvas.draw_circle(o + Vector2(5.4, 1.6) * k, 1.9 * k, DARK)
+			canvas.draw_circle(o + Vector2(5.4, 1.6) * k, 1.4 * k, color)
+		"helmet":
+			_poly(canvas, [Vector2(0.6, 6.4), Vector2(0.6, 3.4), Vector2(1.8, 1.2), Vector2(3.5, 0.4), Vector2(5.2, 1.2), Vector2(6.4, 3.4), Vector2(6.4, 6.4)], o, k, color)
+			canvas.draw_rect(Rect2(o + Vector2(1.6, 3.4) * k, Vector2(3.8, 1.0) * k), DARK)
+		"armor":
+			_poly(canvas, [Vector2(0.4, 1), Vector2(2.4, 0.4), Vector2(3.5, 1.4), Vector2(4.6, 0.4), Vector2(6.6, 1), Vector2(5.8, 3.6), Vector2(5.6, 6.6), Vector2(1.4, 6.6), Vector2(1.2, 3.6)], o, k, color)
+			canvas.draw_line(o + Vector2(3.5, 1.6) * k, o + Vector2(3.5, 6.2) * k, color.darkened(0.35), lw * 0.7, true)
+		"gloves":
+			_poly(canvas, [Vector2(1.4, 6.8), Vector2(1, 3.4), Vector2(1.6, 1), Vector2(2.6, 1), Vector2(3, 0.2), Vector2(4.2, 0.4), Vector2(4.6, 1), Vector2(5.6, 1.4), Vector2(6, 3.6), Vector2(5.4, 6.8)], o, k, color)
+		"boots":
+			_poly(canvas, [Vector2(1.6, 0.4), Vector2(4.4, 0.4), Vector2(4.4, 4.2), Vector2(6.8, 5.2), Vector2(6.8, 6.8), Vector2(1.6, 6.8)], o, k, color)
+		"ring":
+			canvas.draw_arc(o + Vector2(3.5, 4.4) * k, 2.4 * k, 0, TAU, 16, DARK, lw + 2.0, true)
+			canvas.draw_arc(o + Vector2(3.5, 4.4) * k, 2.4 * k, 0, TAU, 16, color, lw + 0.4, true)
+			_poly(canvas, [Vector2(3.5, 0), Vector2(5, 1.4), Vector2(3.5, 2.6), Vector2(2, 1.4)], o, k, Color("a6f4ff"))
+		"lock":
+			canvas.draw_arc(o + Vector2(3.5, 3) * k, 2.0 * k, PI, TAU, 10, color, lw + 0.6, true)
+			_poly(canvas, [Vector2(0.8, 3), Vector2(6.2, 3), Vector2(6.2, 6.8), Vector2(0.8, 6.8)], o, k, color)
+		"chest":
+			_poly(canvas, [Vector2(0.2, 3), Vector2(6.8, 3), Vector2(6.8, 6.8), Vector2(0.2, 6.8)], o, k, color)
+			_poly(canvas, [Vector2(0.2, 3), Vector2(1, 1), Vector2(6, 1), Vector2(6.8, 3)], o, k, color.lightened(0.2))
+			canvas.draw_rect(Rect2(o + Vector2(2.9, 2.6) * k, Vector2(1.2, 1.8) * k), GOLD)
+		"book":
+			_poly(canvas, [Vector2(0.4, 0.6), Vector2(6.4, 0.6), Vector2(6.4, 6.6), Vector2(0.4, 6.6)], o, k, color)
+		"play":
+			_poly(canvas, [Vector2(1, 0.4), Vector2(6.6, 3.5), Vector2(1, 6.6)], o, k, color)
+		"bag":
+			# icona "eroe" (testa e spalle)
+			canvas.draw_circle(o + Vector2(3.5, 2.2) * k, 1.9 * k, color)
+			canvas.draw_arc(o + Vector2(3.5, 7.2) * k, 3.2 * k, PI + 0.3, TAU - 0.3, 12, color, lw + 0.8, true)
+		"shop":
+			canvas.draw_arc(o + Vector2(3.5, 2.4) * k, 1.8 * k, PI, TAU, 10, color, lw * 0.8, true)
+			_poly(canvas, [Vector2(0.6, 2.4), Vector2(6.4, 2.4), Vector2(5.8, 6.8), Vector2(1.2, 6.8)], o, k, color)
+		"anvil":
+			_poly(canvas, [Vector2(0, 1.6), Vector2(6.4, 1.6), Vector2(6.4, 3), Vector2(4.6, 3.6), Vector2(5.4, 6.4), Vector2(1.6, 6.4), Vector2(2.4, 3.6), Vector2(0.8, 2.8)], o, k, color)
+		_:
+			canvas.draw_circle(c, 3.0 * k, color)
+
+static func el_icon(canvas: CanvasItem, el: String, pos: Vector2, scale: float) -> void:
 	icon(canvas, el, pos, scale, Data.EL_COLOR[el])
 
-## Riquadro con bordo pixel
-static func panel(canvas: CanvasItem, r: Rect2, fill: Color = PANEL, edge: Color = PANEL_EDGE) -> void:
-	canvas.draw_rect(r.grow(1), DARK)
-	canvas.draw_rect(r, edge)
-	canvas.draw_rect(r.grow(-1), fill)
-
-## Pulsante: rettangolo colorato con scritta centrata
-static func button(canvas: CanvasItem, r: Rect2, text: String, color: Color, enabled: bool = true, scale: int = 1) -> void:
-	var c := color if enabled else Color("4a4044")
-	canvas.draw_rect(r.grow(1), DARK)
-	canvas.draw_rect(r, c.darkened(0.35))
-	canvas.draw_rect(Rect2(r.position, Vector2(r.size.x, r.size.y - 2)), c)
-	canvas.draw_rect(Rect2(r.position, Vector2(r.size.x, 1)), c.lightened(0.3))
-	var ty := r.position.y + floorf((r.size.y - 2 - 7 * scale) / 2.0)
-	PixelFont.draw_centered(canvas, text, r.get_center().x, ty, scale, Color.WHITE if enabled else TEXT_DIM, DARK)
-
-## Contatore con icona: es. scintille 12
-static func counter(canvas: CanvasItem, icon_name: String, value: int, pos: Vector2, color: Color) -> float:
-	icon(canvas, icon_name, pos, 1, color)
-	var t := str(value)
-	PixelFont.draw_text(canvas, t, pos + Vector2(9, 0), 1, Color.WHITE)
-	return 9 + PixelFont.text_width(t, 1) + 6
+## Distintivo rotondo con l'elemento (debolezza sopra i nemici)
+static func el_badge(canvas: CanvasItem, el: String, center: Vector2, r: float) -> void:
+	var col: Color = Data.EL_COLOR[el] if el != "?" else Color.WHITE
+	canvas.draw_circle(center, r + 1.2, DARK)
+	canvas.draw_circle(center, r, col.darkened(0.6))
+	canvas.draw_arc(center, r, 0, TAU, 16, col, 1.0, true)
+	var k := r * 1.5 / 7.0
+	if el == "?":
+		PixelFont.draw_centered(canvas, "?", center.x, center.y - 5, 1, Color.WHITE)
+	else:
+		icon(canvas, el, center - Vector2(3.5, 3.5) * k, k, col)
 
 ## Icona di un pezzo di equipaggiamento
 static func item_icon_name(item: Dictionary) -> String:
@@ -82,12 +226,13 @@ static func item_icon_name(item: Dictionary) -> String:
 ## Riquadro di un pezzo (colore della rarità, icona, livello)
 static func item_box(canvas: CanvasItem, item: Dictionary, r: Rect2, selected: bool = false) -> void:
 	var rc: Color = Gear.RARITY[item.rar].color
-	canvas.draw_rect(r.grow(1), DARK)
-	canvas.draw_rect(r, rc if not selected else Color.WHITE)
-	canvas.draw_rect(r.grow(-1), rc.darkened(0.7))
-	canvas.draw_rect(Rect2(r.position + Vector2(1, 1), Vector2(r.size.x - 2, 3)), rc.darkened(0.45))
-	var sc := 3 if r.size.x >= 28 else 2
-	var isz := 7 * sc
-	icon(canvas, item_icon_name(item), r.get_center() - Vector2(isz, isz) / 2.0 - Vector2(0, 2), sc, Color.WHITE.lerp(rc, 0.35))
+	rbox(canvas, Rect2(r.position + Vector2(0, 2), r.size), Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 7)
+	rbox(canvas, r, rc.darkened(0.55), Color.WHITE if selected else rc, 7, 2)
+	rbox(canvas, Rect2(r.position + Vector2(2, 2), Vector2(r.size.x - 4, r.size.y * 0.45)), Color(rc, 0.25), Color(0, 0, 0, 0), 5)
+	if item.rar >= 3:
+		glow(canvas, r.get_center(), r.size.x * 0.6, Color(rc, 0.35))
+	var k := r.size.x / 11.0
+	icon(canvas, item_icon_name(item), r.get_center() - Vector2(3.5, 3.5) * k - Vector2(0, 1), k, Color.WHITE.lerp(rc, 0.3))
 	var t := "L%d" % item.lv
-	PixelFont.draw_text(canvas, t, Vector2(r.end.x - PixelFont.text_width(t, 1) - 2, r.end.y - 8), 1, Color.WHITE)
+	var tw := PixelFont.text_width(t, 1)
+	PixelFont.draw_text(canvas, t, Vector2(r.end.x - tw - 3, r.end.y - 11), 1, Color.WHITE, DARK)
