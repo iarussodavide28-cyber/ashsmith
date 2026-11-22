@@ -1,7 +1,7 @@
 extends Node2D
 ## Schermata iniziale: nome del gioco, incudine con braci. Tocca per entrare.
 
-const VERSION_TEXT := "v0.6"
+const VERSION_TEXT := "v0.7"
 
 var embers: Array = []
 var sparks: Array = []

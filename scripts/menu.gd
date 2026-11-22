@@ -465,7 +465,11 @@ func _draw_detail() -> void:
 	if t == "weapon":
 		var wd: Dictionary = Data.WEAPONS[Gear.BASES[it.base].weapon]
 		PixelFont.draw_text(self, wd.desc[0] + ", " + wd.desc[1], Vector2(pr.position.x + 10, y), 1, Art.TEXT_DIM)
-		y += 14
+		y += 12
+		if wd.desc.size() > 2:
+			PixelFont.draw_text(self, wd.desc[2], Vector2(pr.position.x + 10, y), 1, Art.GOLD)
+			y += 12
+		y += 2
 	PixelFont.draw_text(self, Gear.stat_text(it), Vector2(pr.position.x + 10, y), 2, Color.WHITE)
 	y += 22
 	# bonus per rarità (quelli non ancora raggiunti in grigio)

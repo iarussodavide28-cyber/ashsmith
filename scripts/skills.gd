@@ -28,7 +28,7 @@ const OUT := Color("120c24")
 
 ## Esperienza per passare al livello successivo
 static func xp_need(lvl: int) -> int:
-	return 8 + lvl * 5
+	return 6 + lvl * 5
 
 ## 3 abilità diverse fra quelle non ancora al massimo
 static func roll(owned: Dictionary, hp_ratio: float) -> Array:

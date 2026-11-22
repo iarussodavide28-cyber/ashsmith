@@ -55,18 +55,18 @@ static func slots_info(slots: Array, recipes: Array = []) -> Array:
 # ---------------- Armi ----------------
 const WEAPONS := {
 	"sword": {
-		"name": "SPADA", "desc": ["FENDENTI VICINI", "DISTRUGGONO I COLPI"],
-		"dmg": 16.0, "rate": 0.42, "speed": 220.0, "range": 95.0, "size": 9.0, "area": 0.0,
+		"name": "SPADA", "desc": ["FENDENTI VICINI", "DISTRUGGONO I COLPI", "-15% DANNI SUBITI"],
+		"dmg": 21.0, "rate": 0.5, "speed": 230.0, "range": 80.0, "size": 10.0, "area": 0.0, "crit": 0.0, "guard": 0.15,
 		"color": Color("d8dce8"),
 	},
 	"bow": {
-		"name": "ARCO", "desc": ["FRECCE VELOCI", "DA LONTANO"],
-		"dmg": 11.0, "rate": 0.48, "speed": 330.0, "range": 400.0, "size": 3.0, "area": 0.0,
+		"name": "ARCO", "desc": ["FRECCE VELOCI", "DA LONTANO", "+12% CRITICI"],
+		"dmg": 13.0, "rate": 0.42, "speed": 360.0, "range": 400.0, "size": 3.0, "area": 0.0, "crit": 0.12, "guard": 0.0,
 		"color": Color("c8a070"),
 	},
 	"staff": {
-		"name": "BASTONE", "desc": ["SFERE LENTE", "ESPLODONO AD AREA"],
-		"dmg": 9.0, "rate": 0.8, "speed": 120.0, "range": 400.0, "size": 5.0, "area": 26.0,
+		"name": "BASTONE", "desc": ["SFERE LENTE", "ESPLODONO AD AREA", "COLPISCE I GRUPPI"],
+		"dmg": 14.0, "rate": 0.75, "speed": 145.0, "range": 400.0, "size": 5.0, "area": 30.0, "crit": 0.0, "guard": 0.0,
 		"color": Color("c78cff"),
 	},
 }

@@ -113,6 +113,7 @@ var hurt_t := 0.0
 var spirit_t := 0.0
 var orb_ang := 0.0
 var last_dir := Vector2.UP
+var switch_bonus := false   # il primo attacco dopo il cambio arma è un critico potenziato
 
 var autotest := false        # prova automatica (solo per i test, non nel gioco)
 var auto_target = null
@@ -303,7 +304,8 @@ func _spawn_enemy(k: String, p: Vector2) -> Dictionary:
 	else:
 		var d: Dictionary = Data.ENEMIES[k]
 		e.merge(d.duplicate(), true)
-		e.hp = d.hp * (1.0 + 0.1 * (room_n - 1))
+		e.hp = d.hp * (1.0 + 0.13 * (room_n - 1))
+		e.dmg = int(round(d.dmg * (1.25 + 0.03 * (room_n - 1))))
 	e.max = e.hp
 	enemies.append(e)
 	return e
@@ -355,6 +357,8 @@ func _try_switch() -> void:
 	cur_w = 1 - cur_w
 	switch_t = Data.SWITCH_COOLDOWN
 	atk_t = minf(atk_t, 0.15)
+	switch_bonus = true
+	rings.append({"pos": hero_pos, "r0": 8.0, "r1": 30.0, "life": 0.3, "max": 0.3, "col": Color("b9a8ff")})
 	_float(hero_pos + Vector2(0, -16), _wdata().name, Color.WHITE)
 
 # =====================================================================
@@ -505,11 +509,12 @@ func _update_attack(dt: float) -> void:
 	facing = dir
 	last_dir = dir
 	atk_t = _wdata().rate / (1.0 + bonus.aspd_pct + 0.2 * _sk("aspd"))
-	_fire_volley(dir, 1.0)
+	_fire_volley(dir, 1.0, switch_bonus)
+	switch_bonus = false
 	for i in _sk("multi"):
 		volley_q.append({"t": 0.12 * (i + 1)})
 
-func _fire_volley(dir: Vector2, mult: float) -> void:
+func _fire_volley(dir: Vector2, mult: float, sure_crit: bool = false) -> void:
 	var wd := _wdata()
 	var w := _w()
 	var col := _shot_color(w)
@@ -517,6 +522,7 @@ func _fire_volley(dir: Vector2, mult: float) -> void:
 	var dirs: Array = []      # [direzione, spostamento laterale]
 	var base_angles: Array = [0.0] if not bonus.double_shot[cur_w] else [-0.14, 0.14]
 	var nf := 1 + _sk("front")
+	var front_mult := 1.0 if nf == 1 else 0.8
 	for da in base_angles:
 		for i in nf:
 			dirs.append([dir.rotated(da), (i - (nf - 1) / 2.0) * 7.0])
@@ -529,13 +535,15 @@ func _fire_volley(dir: Vector2, mult: float) -> void:
 		dirs.append([dir.rotated(-PI / 2), 0.0])
 	if _sk("back") > 0:
 		dirs.append([-dir, 0.0])
-	var crit_ch: float = bonus.crit + 0.1 * _sk("crit")
-	for d in dirs:
+	var crit_ch: float = bonus.crit + 0.1 * _sk("crit") + wd.crit
+	for idx in dirs.size():
+		var d: Array = dirs[idx]
 		var d2: Vector2 = d[0]
-		var crit: bool = randf() < crit_ch
+		var crit: bool = sure_crit or randf() < crit_ch
+		var dm := dmg * (front_mult if idx < base_angles.size() * nf else 1.0) * (1.3 if sure_crit else 1.0)
 		shots.append({
 			"pos": hero_pos + d2 * 6 + d2.orthogonal() * d[1], "vel": d2 * wd.speed, "life": wd.range / wd.speed,
-			"dmg": dmg * (2.0 if crit else 1.0), "crit": crit, "w": w.key, "slots": w.slots.duplicate(), "size": wd.size,
+			"dmg": dm * (2.0 if crit else 1.0), "crit": crit, "w": w.key, "slots": w.slots.duplicate(), "size": wd.size,
 			"area": wd.area, "hit": [], "col": col, "pierce": _sk("pierce") > 0, "bounce": 1 if _sk("bounce") > 0 else 0,
 			"chain": _sk("chain"), "kb": {"sword": 150.0, "bow": 70.0, "staff": 55.0}.get(w.key, 60.0),
 		})
@@ -611,6 +619,8 @@ func _update_shots(dt: float) -> void:
 			if e.pos.distance_to(s.pos) < e.size / 2.0 + s.size:
 				s.hit.append(e)
 				_hit_enemy(e, s.dmg, s.slots, s.w != "spirit", s.crit, s.vel.normalized() * s.kb)
+				for i in (5 if s.crit else 3):
+					parts.append({"pos": s.pos, "vel": (-s.vel.normalized()).rotated(randf_range(-1.0, 1.0)) * randf_range(50, 120), "life": 0.18, "max": 0.18, "col": s.col.lightened(0.5) if not s.crit else Color("ffd36b"), "size": 1})
 				if s.area > 0.0:
 					_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
 				if s.chain > 0:
@@ -666,7 +676,7 @@ func _explode(p: Vector2, radius: float, dmg: float, slots: Array, col: Color) -
 		if e.spawn > 0.0 or e.dead_t > 0.0:
 			continue
 		if e.pos.distance_to(p) < radius + e.size / 2.0:
-			_hit_enemy(e, dmg * 0.6, slots, false)
+			_hit_enemy(e, dmg * 0.7, slots, false)
 
 # ---------------------------------------------------------------------
 #  Colpi ed elementi
@@ -1120,7 +1130,7 @@ func _update_ground(dt: float) -> void:
 func _hurt_hero(dmg: int) -> void:
 	if hero_inv > 0.0 or state != St.PLAY and state != St.CLEAR:
 		return
-	dmg = maxi(1, int(round(dmg * (1.0 - bonus.dmg_taken))))
+	dmg = maxi(1, int(round(dmg * (1.0 - bonus.dmg_taken) * (1.0 - _wdata().guard))))
 	hero_hp -= dmg
 	hero_inv = 0.8
 	hero_flash = 1.0
@@ -1475,16 +1485,32 @@ func _draw() -> void:
 	for f in floats:
 		var a: float = clampf(f.life * 3.0, 0.0, 1.0)
 		var big: bool = f.get("big", false)
-		PixelFont.draw_centered(self, f.txt, f.pos.x, f.pos.y - 6, 2 if big else 1, Color(f.col, a), Color(OUT, a))
+		var age: float = (0.95 if big else 0.75) - f.life
+		var sc := 1.0 + maxf(0.0, 0.12 - age) * (5.0 if big else 3.0)
+		draw_set_transform(f.pos + off, 0, Vector2(sc, sc))
+		PixelFont.draw_centered(self, f.txt, 0, -6, 2 if big else 1, Color(f.col, a), Color(OUT, a))
+		draw_set_transform(off)
 	if touch_index != -1 and (state == St.PLAY or state == St.CLEAR):
-		draw_circle(joy_origin, JOY_RADIUS, Color(1, 1, 1, 0.08))
-		draw_arc(joy_origin, JOY_RADIUS, 0, TAU, 40, Color(1, 1, 1, 0.35), 1.5, true)
-		var knob := joy_origin + (joy_current - joy_origin).limit_length(JOY_RADIUS)
-		draw_circle(knob, 9, Color(1, 1, 1, 0.45))
+		draw_circle(joy_origin, JOY_RADIUS + 2, Color(0, 0, 0, 0.18))
+		draw_circle(joy_origin, JOY_RADIUS, Color(1, 1, 1, 0.07))
+		draw_arc(joy_origin, JOY_RADIUS, 0, TAU, 40, Color(1, 1, 1, 0.3), 1.5, true)
+		var jd := joy_current - joy_origin
+		if jd.length() > 3.0:
+			var ja := jd.angle()
+			draw_arc(joy_origin, JOY_RADIUS, ja - 0.5, ja + 0.5, 12, Color(1, 0.75, 0.35, 0.9), 3.0, true)
+		var knob := joy_origin + jd.limit_length(JOY_RADIUS)
+		draw_circle(knob, 10, Color(0, 0, 0, 0.25))
+		draw_circle(knob, 9, Color(1, 1, 1, 0.55))
+		draw_circle(knob + Vector2(-2, -2), 4, Color(1, 1, 1, 0.5))
 	draw_set_transform(Vector2.ZERO)
 	_draw_vignette()
-	if hurt_t > 0.0:
+	var low := float(hero_hp) / max_hp < 0.3 and (state == St.PLAY or state == St.CLEAR)
+	if hurt_t > 0.0 or low:
+		var keep := hurt_t
+		if low:
+			hurt_t = maxf(hurt_t, 0.35 + 0.25 * sin(time * 5.0))
 		_draw_hurt()
+		hurt_t = keep
 	if fade_t > 0.0:
 		draw_rect(Rect2(0, HUD_H, _size().x, _size().y - HUD_H - BAR_H), Color(0.04, 0.02, 0.08, fade_t / 0.35))
 	_draw_hud()
@@ -1736,9 +1762,11 @@ func _poly(pts: Array, col: Color, outline: bool = true) -> void:
 func _draw_rocks() -> void:
 	for o in obs:
 		var rr: Rect2 = o
-		Art.rbox(self, Rect2(rr.position + Vector2(3, 5), rr.size), Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 6)
-		Art.rbox(self, rr, Color("5a4a46"), OUT, 6, 2)
-		Art.rbox(self, Rect2(rr.position + Vector2(2, 2), Vector2(rr.size.x - 4, rr.size.y * 0.55)), Color("6e5c56"), Color(0, 0, 0, 0), 5)
+		# vista 3/4: faccia frontale scura, faccia superiore chiara
+		Art.rbox(self, Rect2(rr.position + Vector2(2, 7), rr.size), Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 7)
+		Art.rbox(self, Rect2(rr.position + Vector2(0, -4), rr.size + Vector2(0, 4)), Color("3e3230"), OUT, 6, 2)
+		Art.rbox(self, Rect2(rr.position + Vector2(0, -6), Vector2(rr.size.x, rr.size.y - 4)), Color("6e5c56"), OUT, 6, 2)
+		Art.rbox(self, Rect2(rr.position + Vector2(3, -4), Vector2(rr.size.x - 6, 5)), Color("85716a"), Color(0, 0, 0, 0), 3)
 		var c := rr.get_center()
 		draw_polyline(PackedVector2Array([c + Vector2(-3, -7), c + Vector2(1, -1), c + Vector2(-2, 4), c + Vector2(1, 8)]), Color("3a2c2a"), 1.2, true)
 
@@ -2040,12 +2068,21 @@ func _draw_hero() -> void:
 	var bw := 30.0
 	var by := c.y - r - 16
 	Art.rbox(self, Rect2(hero_pos.x - bw / 2.0, by, bw, 5), Color("10201a"), OUT, 3, 1)
-	Art.rbox(self, Rect2(hero_pos.x - bw / 2.0 + 1, by + 1, (bw - 2) * float(hero_hp) / max_hp, 3), Art.GREEN, Color(0, 0, 0, 0), 2)
+	var hk := float(hero_hp) / max_hp
+	var hcol := Art.GREEN if hk > 0.5 else (Color("ffd24a") if hk > 0.25 else Art.HP)
+	Art.rbox(self, Rect2(hero_pos.x - bw / 2.0 + 1, by + 1, (bw - 2) * hk, 3), hcol, Color(0, 0, 0, 0), 2)
 	PixelFont.draw_centered(self, str(hero_hp), hero_pos.x, by - 11, 1, Color.WHITE, OUT)
 
 func _draw_shot(s: Dictionary) -> void:
 	var col: Color = s.col
 	var dir: Vector2 = s.vel.normalized()
+	if s.w != "sword":
+		# scia luminosa
+		var tl: float = minf(s.vel.length() * 0.06, 18.0)
+		draw_line(s.pos - dir * tl, s.pos, Color(col, 0.0), s.size * 1.4, true)
+		for i in 3:
+			var k := (i + 1) / 3.0
+			draw_line(s.pos - dir * tl * k, s.pos - dir * tl * (k - 0.34), Color(col, 0.45 * (1.0 - k) + 0.1), maxf(1.0, s.size * (1.6 - k)), true)
 	match s.w:
 		"sword":
 			var a := dir.angle()
@@ -2162,6 +2199,8 @@ func _draw_bar() -> void:
 			PixelFont.draw_text(self, nm, r.position + Vector2(5, r.size.y - 11), 1, _shot_color(w))
 	var sr := _switch_rect()
 	var ready := switch_t <= 0.0
+	if ready and atk_t <= 0.0:
+		Art.glow(self, sr.get_center(), 60, Color(0.6, 0.5, 1.0, 0.18 + 0.08 * sin(time * 4.0)))
 	Art.button(self, sr, "", Color("7d6bff") if ready else Color("3a3070"), true)
 	var other: Dictionary = weapons[1 - cur_w] if weapons.size() > 1 else weapons[0]
 	Art.icon(self, other.key, sr.position + Vector2(8, 10), 2.8, Color.WHITE)
