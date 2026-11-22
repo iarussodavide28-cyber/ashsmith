@@ -29,7 +29,7 @@ const ALTAR := {
 	"altar_skill": {"name": "Dono della brace", "desc": "Un'abilità a caso, subito", "cat": "atk", "icon": "spark"},
 }
 
-const CAT_COLOR := {"atk": Color("ff7a2a"), "def": Color("3fcf7a"), "util": Color("4aa8ff")}
+const CAT_COLOR := {"atk": Color("e0622a"), "def": Color("4aae6a"), "util": Color("3f8fd0")}
 const OUT := Color("120c24")
 
 ## Esperienza per passare al livello successivo
@@ -58,10 +58,17 @@ static func _arrow(cv: CanvasItem, from: Vector2, dir: Vector2, length: float, c
 static func icon(cv: CanvasItem, key: String, c: Vector2, r: float) -> void:
 	var cat: String = LIST[key].cat if LIST.has(key) else "atk"
 	var col: Color = CAT_COLOR[cat]
-	cv.draw_circle(c, r + 1.8, OUT)
-	cv.draw_circle(c, r, col.darkened(0.35))
-	cv.draw_circle(c + Vector2(0, -r * 0.12), r * 0.86, col)
-	cv.draw_circle(c + Vector2(-r * 0.4, -r * 0.45), r * 0.2, Color(1, 1, 1, 0.35))
+	# medaglione esagonale di metallo
+	var hex := PackedVector2Array()
+	var inner := PackedVector2Array()
+	for i in 6:
+		var a := -PI / 2 + i * TAU / 6.0
+		hex.append(c + Vector2.from_angle(a) * (r + 1.5))
+		inner.append(c + Vector2.from_angle(a) * (r * 0.8))
+	Art.grad_poly(cv, hex, col.darkened(0.2), col.darkened(0.75))
+	Art.outline(cv, hex, OUT, 2.5)
+	Art.outline(cv, inner, Color(col.lightened(0.4), 0.5), 1.0)
+	Art.outline(cv, PackedVector2Array([hex[0], hex[1], hex[2], hex[3], hex[4], hex[5]]), Color(Art.GOLD, 0.8), 1.0)
 	var k := r / 14.0
 	var wc := Color.WHITE
 	var w := maxf(1.4, 2.2 * k)

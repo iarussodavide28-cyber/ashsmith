@@ -127,6 +127,20 @@ const WAVES := {
 	11: [["zombie", "zombie", "zombie", "archer", "archer"], ["golem", "imp", "imp", "spitter"]],
 }
 
+## Talenti: potenziamenti permanenti comprati con l'oro
+const TALENTS := {
+	"vigore": {"name": "Vigore", "desc": "+12 vita massima", "max": 10, "icon": "hp", "stat": "hp", "val": 12.0},
+	"forza": {"name": "Forza", "desc": "+4% danni con le armi", "max": 10, "icon": "atk", "stat": "atk", "val": 0.04},
+	"tempra": {"name": "Tempra", "desc": "-2% danni subiti", "max": 10, "icon": "drain", "stat": "dmg_taken", "val": 0.02},
+	"ristoro": {"name": "Ristoro", "desc": "+3 cura tra le stanze", "max": 10, "icon": "heal", "stat": "room_heal", "val": 3.0},
+	"avidita": {"name": "Avidità", "desc": "+6% oro a fine partita", "max": 10, "icon": "spark", "stat": "gold_pct", "val": 0.06},
+	"mantice": {"name": "Mantice", "desc": "+1 scintilla a ogni stanza", "max": 5, "icon": "aspd", "stat": "first_spark", "val": 1.0},
+}
+const TALENT_ORDER := ["vigore", "forza", "tempra", "ristoro", "avidita", "mantice"]
+
+static func talent_cost(lv: int) -> int:
+	return 120 + lv * 140
+
 const SPARK_TO_GOLD := 3   # 3 scintille = 1 oro
 const BASE_PRICE := 18
 const PRICE_STEP := 5

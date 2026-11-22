@@ -18,6 +18,7 @@ var shop_day := ""             # giorno delle offerte del giorno
 var shop_bought: Array = []    # offerte del giorno già comprate
 var gift_day := ""             # giorno dell'ultimo regalo gratis
 var sound := true              # suoni e musica
+var talents := {}              # talento -> livello
 
 func _ready() -> void:
 	load_game()
@@ -51,6 +52,11 @@ func load_game() -> void:
 	runs = int(d.get("runs", 0))
 	wins = int(d.get("wins", 0))
 	sound = bool(d.get("sound", true))
+	talents = {}
+	var tl = d.get("talents", {})
+	if typeof(tl) == TYPE_DICTIONARY:
+		for k in tl:
+			talents[str(k)] = int(tl[k])
 	if int(d.get("version", 1)) < VERSION:
 		return   # salvataggio vecchio: si tengono solo oro, gemme e record
 	var m = d.get("materials", {})
@@ -79,7 +85,7 @@ func save_game() -> void:
 	if f == null:
 		return
 	f.store_string(JSON.stringify({
-		"version": VERSION, "sound": sound, "gold": gold, "gems": gems, "best_room": best_room,
+		"version": VERSION, "sound": sound, "talents": talents, "gold": gold, "gems": gems, "best_room": best_room,
 		"runs": runs, "wins": wins, "materials": materials, "items": items,
 		"equipped": equipped, "recipes": recipes, "uid": uid,
 		"shop_day": shop_day, "shop_bought": shop_bought, "gift_day": gift_day,
@@ -223,8 +229,20 @@ func bonuses() -> Dictionary:
 		"hp": 0.0, "atk_pct": 0.0, "aspd_pct": 0.0, "speed_pct": 0.0, "crit": 0.05,
 		"room_heal": 8.0, "dmg_taken": 0.0, "first_spark": 0, "dmg_pct": 0.0,
 		"double_shot": [false, false], "revive": false, "cheap_forge": false,
-		"extra_spark": false, "crit_burn": false, "weapon_atk": [0.0, 0.0],
+		"extra_spark": false, "crit_burn": false, "weapon_atk": [0.0, 0.0], "gold_pct": 0.0,
 	}
+	for tk in talents:
+		if not Data.TALENTS.has(tk):
+			continue
+		var td: Dictionary = Data.TALENTS[tk]
+		var v: float = td.val * int(talents[tk])
+		if td.stat == "atk":
+			b.weapon_atk[0] += v
+			b.weapon_atk[1] += v
+		elif td.stat == "first_spark":
+			b.first_spark += int(v)
+		else:
+			b[td.stat] += v
 	for s in Gear.SLOTS:
 		var it := equipped_item(s)
 		if it.is_empty():

@@ -1,16 +1,27 @@
 class_name Art
-## Disegni del gioco nello stile di Braceforte 2: forme tonde con contorno scuro,
-## colori pieni, bagliori, pannelli e pulsanti arrotondati.
+## Kit grafico "Forgia oscura": ferro scuro, metallo fuso, oro.
+## Pannelli e pulsanti con angoli tagliati, bordi metallici, rivetti dorati.
 
-const DARK := Color("120c24")          # contorno di tutto
-const PANEL := Color("231c42")
-const PANEL_EDGE := Color("4a3f7a")
-const TEXT_DIM := Color("a99cc9")
-const GOLD := Color("ffc531")
-const GEM := Color("5ab4ff")
-const SPARK := Color("ff8a3d")
-const HP := Color("ff3d5a")
-const GREEN := Color("4fdc8a")
+const DARK := Color("0b0a0e")          # contorno di tutto
+const INK := Color("0b0a0e")
+const IRON_D := Color("141218")
+const IRON := Color("1f1c25")
+const IRON_L := Color("2e2a36")
+const STEEL := Color("57525f")
+const STEEL_L := Color("8e8898")
+const PANEL := Color("1c1a22")
+const PANEL_EDGE := Color("4a4552")
+const TEXT := Color("efe6d6")
+const TEXT_DIM := Color("a39a8e")
+const GOLD := Color("e8b04a")
+const GOLD_L := Color("ffe0a0")
+const BRONZE := Color("9a6a34")
+const MOLTEN := Color("ff6a1a")
+const MOLTEN_L := Color("ffb347")
+const GEM := Color("4fb8e8")
+const SPARK := Color("ff7a2a")
+const HP := Color("d8343e")
+const GREEN := Color("5fd08a")
 
 static var _boxes := {}
 static var _glow: Texture2D
@@ -52,36 +63,111 @@ static func box(fill: Color, edge: Color, radius: int, border: int = 2) -> Style
 	_boxes[key] = b
 	return b
 
+## Riquadro con angoli leggermente arrotondati (usato per barre e dettagli)
 static func rbox(canvas: CanvasItem, r: Rect2, fill: Color, edge: Color = Color(0, 0, 0, 0), radius: int = 6, border: int = 2) -> void:
 	if edge.a <= 0.0:
 		border = 0
-	canvas.draw_style_box(box(fill, edge, radius, border), r)
+	canvas.draw_style_box(box(fill, edge, mini(radius, 3), border), r)
 
-## Pannello scuro arrotondato (stile carte di Braceforte 2)
+## Punti di un rettangolo con gli angoli tagliati
+static func cut_pts(r: Rect2, c: float) -> PackedVector2Array:
+	c = minf(c, minf(r.size.x, r.size.y) * 0.45)
+	return PackedVector2Array([
+		r.position + Vector2(c, 0), Vector2(r.end.x - c, r.position.y), Vector2(r.end.x, r.position.y + c),
+		Vector2(r.end.x, r.end.y - c), Vector2(r.end.x - c, r.end.y), Vector2(r.position.x + c, r.end.y),
+		Vector2(r.position.x, r.end.y - c), Vector2(r.position.x, r.position.y + c),
+	])
+
+## Poligono con sfumatura verticale
+static func grad_poly(canvas: CanvasItem, pts: PackedVector2Array, top: Color, bottom: Color) -> void:
+	var y0 := 1e9
+	var y1 := -1e9
+	for p in pts:
+		y0 = minf(y0, p.y)
+		y1 = maxf(y1, p.y)
+	var cols := PackedColorArray()
+	for p in pts:
+		cols.append(top.lerp(bottom, (p.y - y0) / maxf(1.0, y1 - y0)))
+	canvas.draw_polygon(pts, cols)
+
+static func outline(canvas: CanvasItem, pts: PackedVector2Array, col: Color, w: float) -> void:
+	var q := pts.duplicate()
+	q.append(pts[0])
+	canvas.draw_polyline(q, col, w, true)
+
+## Lastra di ferro con angoli tagliati, bordo d'acciaio e luce in alto
+static func plate(canvas: CanvasItem, r: Rect2, top: Color = IRON_L, bottom: Color = IRON_D, edge: Color = STEEL, cut: float = 6.0, rivets: bool = false) -> void:
+	var sh := cut_pts(Rect2(r.position + Vector2(0, 3), r.size), cut)
+	canvas.draw_colored_polygon(sh, Color(0, 0, 0, 0.45))
+	var pts := cut_pts(r, cut)
+	grad_poly(canvas, pts, top, bottom)
+	outline(canvas, pts, INK, 3.0)
+	outline(canvas, cut_pts(r.grow(-1.5), maxf(1.0, cut - 1.0)), edge, 1.0)
+	canvas.draw_line(Vector2(r.position.x + cut, r.position.y + 2.5), Vector2(r.end.x - cut, r.position.y + 2.5), Color(1, 1, 1, 0.12), 1.0)
+	if rivets:
+		for p in [r.position + Vector2(5, 5), Vector2(r.end.x - 5, r.position.y + 5), Vector2(r.position.x + 5, r.end.y - 5), r.end - Vector2(5, 5)]:
+			canvas.draw_circle(p, 1.8, INK)
+			canvas.draw_circle(p, 1.2, BRONZE)
+			canvas.draw_circle(p - Vector2(0.4, 0.4), 0.5, GOLD_L)
+
+## Pannello scuro (compatibile con le chiamate vecchie)
 static func panel(canvas: CanvasItem, r: Rect2, fill: Color = PANEL, edge: Color = PANEL_EDGE) -> void:
-	rbox(canvas, Rect2(r.position + Vector2(0, 2), r.size), Color(0, 0, 0, 0.3), Color(0, 0, 0, 0), 8)
-	rbox(canvas, r, fill, edge, 8, 2)
+	plate(canvas, r, fill.lightened(0.06), fill.darkened(0.25), edge, 6.0)
 
-## Pulsante con sfumatura e "spessore" sotto, come il COMBATTI! di Braceforte 2
+## Pulsante in metallo: arancio fuso per le azioni principali, altri colori per il resto
 static func button(canvas: CanvasItem, r: Rect2, text: String, color: Color, enabled: bool = true, scale: int = 1) -> void:
-	var c := color if enabled else Color("4a4466")
-	var rad := int(minf(10.0, r.size.y / 2.5))
-	rbox(canvas, Rect2(r.position + Vector2(0, 3), r.size), c.darkened(0.45), Color(0, 0, 0, 0), rad)
-	rbox(canvas, r, c, Color(0, 0, 0, 0), rad)
-	rbox(canvas, Rect2(r.position + Vector2(2, 1), Vector2(r.size.x - 4, r.size.y * 0.48)), c.lightened(0.18), Color(0, 0, 0, 0), rad - 1)
+	var c := color if enabled else Color("2c2a31")
+	var cut := minf(7.0, r.size.y * 0.3)
+	var sh := cut_pts(Rect2(r.position + Vector2(0, 3), r.size), cut)
+	canvas.draw_colored_polygon(sh, c.darkened(0.65) if enabled else Color(0, 0, 0, 0.4))
+	var pts := cut_pts(r, cut)
+	grad_poly(canvas, pts, c.lightened(0.22), c.darkened(0.28))
+	outline(canvas, pts, INK, 2.5)
+	if enabled:
+		outline(canvas, cut_pts(r.grow(-1.5), cut - 1.0), Color(c.lightened(0.5), 0.55), 1.0)
+		canvas.draw_line(Vector2(r.position.x + cut, r.position.y + 2.5), Vector2(r.end.x - cut, r.position.y + 2.5), Color(1, 1, 1, 0.35), 1.0)
 	if text != "":
-		var size := PixelFont.px(scale)
-		var ty := r.position.y + (r.size.y - size) / 2.0 - 1
-		PixelFont.draw_centered(canvas, text, r.get_center().x, ty, scale, Color.WHITE if enabled else TEXT_DIM, Color(0, 0, 0, 0.35))
+		var sc := scale if scale > 1 else (2 if r.size.y >= 22 else 1)
+		var size := PixelFont.px(sc)
+		var ty := r.position.y + (r.size.y - size) / 2.0 - (0.0 if sc == 1 else 1.0)
+		if sc >= 2 and PixelFont.text_width(text, sc) > r.size.x - 8:
+			sc = 1
+			size = PixelFont.px(1)
+			ty = r.position.y + (r.size.y - size) / 2.0
+		PixelFont.draw_centered(canvas, text, r.get_center().x, ty, sc, TEXT if enabled else Color("6e6874"), Color(0, 0, 0, 0.55) if enabled else Color(0, 0, 0, 0))
 
 ## Pillola con icona e numero (barra in alto)
 static func counter(canvas: CanvasItem, icon_name: String, value: int, pos: Vector2, color: Color) -> float:
 	var t := str(value)
-	var w := 22.0 + PixelFont.text_width(t, 1)
-	rbox(canvas, Rect2(pos.x - 3, pos.y - 3, w, 15), Color(0, 0, 0, 0.38), Color(1, 1, 1, 0.1), 8, 1)
+	var w := 24.0 + PixelFont.text_width(t, 1)
+	var r := Rect2(pos.x - 3, pos.y - 3, w, 15)
+	var pts := cut_pts(r, 4.0)
+	canvas.draw_colored_polygon(pts, Color(0, 0, 0, 0.55))
+	outline(canvas, pts, Color(1, 1, 1, 0.12), 1.0)
 	icon(canvas, icon_name, pos + Vector2(0, -1), 1.6, color)
-	PixelFont.draw_text(canvas, t, pos + Vector2(15, 0), 1, Color.WHITE)
+	PixelFont.draw_text(canvas, t, pos + Vector2(15, 0), 1, TEXT)
 	return w + 4
+
+## Intestazione decorata: testo con linee e rombi ai lati
+static func header(canvas: CanvasItem, text: String, cx: float, y: float, w: float, color: Color = GOLD) -> void:
+	var tw := PixelFont.text_width(text, 2)
+	PixelFont.draw_centered(canvas, text, cx, y, 2, color, Color(0, 0, 0, 0.6))
+	var ly := y + 8
+	for side in [-1.0, 1.0]:
+		var a: float = cx + side * (tw / 2.0 + 8)
+		var b: float = cx + side * (w / 2.0)
+		canvas.draw_line(Vector2(a, ly), Vector2(b, ly), Color(color, 0.55), 1.0)
+		var d := Vector2(a + side * 1.0, ly)
+		canvas.draw_colored_polygon(PackedVector2Array([d + Vector2(0, -3), d + Vector2(3 * side, 0), d + Vector2(0, 3), d + Vector2(-3 * side, 0)]), color)
+
+## Barra di avanzamento metallica
+static func bar(canvas: CanvasItem, r: Rect2, k: float, col: Color) -> void:
+	canvas.draw_rect(r.grow(1.5), INK)
+	canvas.draw_rect(r, Color("0e0c12"))
+	if k > 0.0:
+		var f := Rect2(r.position, Vector2(r.size.x * clampf(k, 0.0, 1.0), r.size.y))
+		grad_poly(canvas, PackedVector2Array([f.position, Vector2(f.end.x, f.position.y), f.end, Vector2(f.position.x, f.end.y)]), col.lightened(0.3), col.darkened(0.25))
+		canvas.draw_line(f.position + Vector2(0, 1), Vector2(f.end.x, f.position.y + 1), Color(1, 1, 1, 0.3), 1.0)
 
 # ---------------------------------------------------------------------
 #  Icone disegnate (scala 1 = circa 7 pixel)
@@ -223,16 +309,21 @@ static func item_icon_name(item: Dictionary) -> String:
 		return Gear.BASES[item.base].weapon
 	return t
 
-## Riquadro di un pezzo (colore della rarità, icona, livello)
+## Riquadro di un pezzo: cornice tagliata del colore della rarità
 static func item_box(canvas: CanvasItem, item: Dictionary, r: Rect2, selected: bool = false) -> void:
 	var rc: Color = Gear.RARITY[item.rar].color
-	rbox(canvas, Rect2(r.position + Vector2(0, 2), r.size), Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 7)
-	rbox(canvas, r, rc.darkened(0.55), Color.WHITE if selected else rc, 7, 2)
-	rbox(canvas, Rect2(r.position + Vector2(2, 2), Vector2(r.size.x - 4, r.size.y * 0.45)), Color(rc, 0.25), Color(0, 0, 0, 0), 5)
+	var cut := r.size.x * 0.16
+	canvas.draw_colored_polygon(cut_pts(Rect2(r.position + Vector2(0, 2), r.size), cut), Color(0, 0, 0, 0.5))
+	var pts := cut_pts(r, cut)
+	grad_poly(canvas, pts, rc.darkened(0.35), rc.darkened(0.78))
 	if item.rar >= 3:
-		glow(canvas, r.get_center(), r.size.x * 0.6, Color(rc, 0.35))
+		glow(canvas, r.get_center(), r.size.x * 0.55, Color(rc, 0.4))
+	outline(canvas, pts, INK, 2.5)
+	outline(canvas, cut_pts(r.grow(-1.5), cut - 1.0), Color.WHITE if selected else rc.lightened(0.15), 1.2)
+	canvas.draw_colored_polygon(PackedVector2Array([r.position + Vector2(cut, 2), Vector2(r.end.x - cut, r.position.y + 2), Vector2(r.end.x - 2, r.position.y + cut), Vector2(r.position.x + 2, r.position.y + r.size.y * 0.45)]), Color(1, 1, 1, 0.07))
 	var k := r.size.x / 11.0
-	icon(canvas, item_icon_name(item), r.get_center() - Vector2(3.5, 3.5) * k - Vector2(0, 1), k, Color.WHITE.lerp(rc, 0.3))
-	var t := "L%d" % item.lv
+	icon(canvas, item_icon_name(item), r.get_center() - Vector2(3.5, 3.5) * k - Vector2(0, 1), k, Color("e8e2d8").lerp(rc, 0.25))
+	var t := "%d" % item.lv
 	var tw := PixelFont.text_width(t, 1)
-	PixelFont.draw_text(canvas, t, Vector2(r.end.x - tw - 3, r.end.y - 11), 1, Color.WHITE, DARK)
+	canvas.draw_colored_polygon(cut_pts(Rect2(r.end.x - tw - 7, r.end.y - 11, tw + 5, 10), 2.0), Color(0, 0, 0, 0.7))
+	PixelFont.draw_text(canvas, t, Vector2(r.end.x - tw - 4.5, r.end.y - 11), 1, TEXT)

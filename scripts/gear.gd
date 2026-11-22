@@ -10,11 +10,11 @@ const SLOT_NAME := {
 const TYPES := ["weapon", "helmet", "armor", "gloves", "boots", "ring"]
 
 const RARITY := [
-	{"name": "COMUNE", "color": Color("a8a8b0"), "mult": 1.0, "max_lv": 10},
-	{"name": "NON COMUNE", "color": Color("5ad06a"), "mult": 1.4, "max_lv": 15},
-	{"name": "RARO", "color": Color("4aa8ff"), "mult": 1.9, "max_lv": 20},
-	{"name": "EPICO", "color": Color("b866ff"), "mult": 2.6, "max_lv": 25},
-	{"name": "LEGGENDARIO", "color": Color("ff9a2a"), "mult": 3.5, "max_lv": 30},
+	{"name": "COMUNE", "color": Color("9c9a96"), "mult": 1.0, "max_lv": 10},
+	{"name": "NON COMUNE", "color": Color("62b85a"), "mult": 1.4, "max_lv": 15},
+	{"name": "RARO", "color": Color("3f8fe0"), "mult": 1.9, "max_lv": 20},
+	{"name": "EPICO", "color": Color("a35ae0"), "mult": 2.6, "max_lv": 25},
+	{"name": "LEGGENDARIO", "color": Color("f0a02a"), "mult": 3.5, "max_lv": 30},
 ]
 const RARITY_INFO := [
 	"SOLO STATISTICHE BASE",

@@ -160,9 +160,12 @@ func _ready() -> void:
 
 ## Solo per le prove: ?room=7&sparks=200 nell'indirizzo salta a una stanza
 func _debug_params() -> void:
-	if not OS.has_feature("web"):
-		return
-	var q = JavaScriptBridge.eval("window.location.search", true)
+	var q = ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("q="):
+			q = a.substr(2)
+	if q == "" and OS.has_feature("web"):
+		q = JavaScriptBridge.eval("window.location.search", true)
 	if typeof(q) != TYPE_STRING or q == "":
 		return
 	for pair in str(q).trim_prefix("?").split("&"):
@@ -186,6 +189,11 @@ func _debug_params() -> void:
 					skills[k] = _sk(k) + 1
 		elif kv[0] == "forge" and not anvil.is_empty():
 			_open_forge()
+		elif kv[0] == "pause":
+			state = St.PAUSE
+		elif kv[0] == "end" and not OS.has_feature("web"):
+			_end_run(kv[1] == "1")
+			end_t = 5.0
 
 # =====================================================================
 #  Spazio di gioco
@@ -1551,7 +1559,7 @@ func _end_run(win: bool) -> void:
 	touch_index = -1
 	var frac := 1.0 if win else clampf(float(room_n) / Data.ROOMS, 0.0, 1.0)
 	var spark_gold := sparks / Data.SPARK_TO_GOLD
-	var gold_kept := int(round((run_gold + spark_gold) * frac))
+	var gold_kept := int(round((run_gold + spark_gold) * frac * (1.0 + bonus.get("gold_pct", 0.0))))
 	var gems_kept := int(round(run_gems * frac))
 	end_info = {"gold": run_gold, "spark_gold": spark_gold, "sparks": sparks, "frac": frac, "gold_kept": gold_kept, "gems_kept": gems_kept, "gems": run_gems, "mats": {}}
 	for m in run_mats:
@@ -1794,7 +1802,7 @@ func _draw_map(pos: Vector2, w: float, a: float = 1.0) -> void:
 		var c := pos + Vector2(i * step, 0)
 		var special := rn in Data.BIG_FORGE_ROOMS or rn == Data.MINIBOSS_ROOM or rn == Data.BOSS_ROOM
 		var rad := 6.0 if special else 4.0
-		var col := Color("ffb03a") if rn < room_n else (Color.WHITE if rn == room_n else Color("4a3f7a"))
+		var col := Color("ffb03a") if rn < room_n else (Color.WHITE if rn == room_n else Color("3a3540"))
 		if rn == room_n:
 			Art.glow(self, c, 14, Color(1, 0.8, 0.4, 0.6 * a))
 		draw_circle(c, rad + 1.5, Color(OUT, a))
@@ -1943,118 +1951,135 @@ const TILE_A := Color("4a3c3a")
 const TILE_B := Color("54443f")
 
 func _draw_room() -> void:
-	var s := _size()
 	var r := _room_rect()
-	draw_rect(Rect2(-60, -60, _view_w() + 120, TOP_WALL + ROOM_H + 200), Color("0a0816"))
+	draw_rect(Rect2(-60, -60, _view_w() + 120, TOP_WALL + ROOM_H + 200), Art.INK)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = floor_seed
 	var tint := Color(1, 1, 1)
 	if room_n == Data.BOSS_ROOM:
-		tint = Color(1.12, 0.86, 0.82)
+		tint = Color(1.15, 0.85, 0.82)
 	elif room_n == Data.MINIBOSS_ROOM:
-		tint = Color(0.9, 0.95, 1.06)
-	var ts := 19.25
-	var cols := int(ceil(r.size.x / ts))
-	var rows := int(ceil(r.size.y / ts))
-	draw_rect(r, Color("2a201f") * tint)
+		tint = Color(0.92, 0.95, 1.08)
+	# pavimento: lastre di basalto sfalsate, alcune con vene di lava
+	draw_rect(r, Color("121014"))
+	var sw := 30.0
+	var shh := 21.0
+	var rows := int(ceil(r.size.y / shh)) + 1
+	var pulse := 0.55 + 0.45 * sin(time * 2.2)
 	for y in rows:
-		for x in cols:
-			var base := TILE_A.lerp(TILE_B, rng.randf()) * tint
-			var t := Rect2(r.position + Vector2(x * ts + 1, y * ts + 1), Vector2(ts - 2, ts - 2)).intersection(r)
-			if t.size.x <= 0 or t.size.y <= 0:
+		var offx := 0.0 if y % 2 == 0 else -sw * 0.5
+		var x := offx
+		while x < r.size.x:
+			var t := Rect2(r.position + Vector2(x + 1, y * shh + 1), Vector2(sw - 2, shh - 2)).intersection(r)
+			x += sw
+			if t.size.x <= 2 or t.size.y <= 2:
 				continue
-			draw_rect(t, base)
-			draw_rect(Rect2(t.position, Vector2(t.size.x, 1.5)), base.lightened(0.12))
-			draw_rect(Rect2(t.position, Vector2(1.5, t.size.y)), base.lightened(0.06))
-			draw_rect(Rect2(t.position + Vector2(0, t.size.y - 1.5), Vector2(t.size.x, 1.5)), base.darkened(0.2))
+			var base := Color("2a262e").lerp(Color("36303a"), rng.randf()) * tint
+			Art.grad_poly(self, PackedVector2Array([t.position, Vector2(t.end.x, t.position.y), t.end, Vector2(t.position.x, t.end.y)]), base.lightened(0.06), base.darkened(0.12))
+			draw_line(t.position + Vector2(1, 0.5), Vector2(t.end.x - 1, t.position.y + 0.5), base.lightened(0.18), 1.0)
 			var roll := rng.randf()
-			if roll < 0.18:
-				# crepa
-				var a := t.position + Vector2(rng.randf_range(3, ts - 6), rng.randf_range(3, ts - 6))
-				var b := a + Vector2(rng.randf_range(-5, 5), rng.randf_range(2, 6))
-				var c := b + Vector2(rng.randf_range(-4, 4), rng.randf_range(1, 4))
-				draw_polyline(PackedVector2Array([a, b, c]), base.darkened(0.45), 1.0, true)
-			elif roll < 0.28:
-				# cenere
+			if roll < 0.05:
+				# vena di lava
+				var p0 := t.position + Vector2(rng.randf_range(3, t.size.x - 3), 2)
+				var p1 := p0 + Vector2(rng.randf_range(-6, 6), t.size.y * 0.5)
+				var p2 := p1 + Vector2(rng.randf_range(-5, 5), t.size.y * 0.45)
+				var vl := PackedVector2Array([p0, p1, p2])
+				Art.glow(self, p1, 10, Color(1, 0.35, 0.05, 0.22 * pulse))
+				draw_polyline(vl, Color(0.25, 0.05, 0.0), 2.4, true)
+				draw_polyline(vl, Color(1, 0.45 + 0.2 * pulse, 0.1, 0.9), 1.0, true)
+			elif roll < 0.24:
+				var p0 := t.position + Vector2(rng.randf_range(4, t.size.x - 8), rng.randf_range(3, t.size.y - 6))
+				draw_polyline(PackedVector2Array([p0, p0 + Vector2(4, 3), p0 + Vector2(3, 7)]), base.darkened(0.45), 1.0, true)
+			elif roll < 0.32:
 				for i in 3:
-					draw_circle(t.position + Vector2(rng.randf_range(3, ts - 4), rng.randf_range(3, ts - 4)), rng.randf_range(0.8, 1.6), Color(0.75, 0.7, 0.65, 0.18))
-			elif roll < 0.31:
-				# brace nel pavimento
-				var p := t.position + Vector2(rng.randf_range(4, ts - 5), rng.randf_range(4, ts - 5))
-				var fl := 0.6 + 0.4 * sin(time * 3.0 + p.x)
-				Art.glow(self, p, 6, Color(1, 0.45, 0.1, 0.35 * fl))
-				draw_line(p - Vector2(2, 1), p + Vector2(2, 1), Color(1, 0.55, 0.2, 0.8 * fl), 1.0, true)
-	# decorazioni: sigillo della forgia, ossa, griglie
+					draw_circle(t.position + Vector2(rng.randf_range(3, t.size.x - 3), rng.randf_range(3, t.size.y - 3)), rng.randf_range(0.6, 1.3), Color(0.8, 0.75, 0.7, 0.12))
+	# sigillo della forgia inciso al centro
 	var sc := r.get_center() + Vector2(0, 20)
-	draw_arc(sc, 46, 0, TAU, 48, Color(1, 0.5, 0.2, 0.10), 3.0, true)
-	draw_arc(sc, 38, 0, TAU, 48, Color(1, 0.5, 0.2, 0.07), 1.5, true)
+	draw_arc(sc, 46, 0, TAU, 48, Color(1, 0.5, 0.2, 0.12), 2.0, true)
+	draw_arc(sc, 40, 0, TAU, 48, Color(1, 0.5, 0.2, 0.08), 1.0, true)
 	for i in 6:
 		var aa := i * TAU / 6.0 + 0.3
-		draw_line(sc + Vector2.from_angle(aa) * 38, sc + Vector2.from_angle(aa + 2.1) * 38, Color(1, 0.5, 0.2, 0.06), 1.5, true)
+		draw_line(sc + Vector2.from_angle(aa) * 40, sc + Vector2.from_angle(aa + 2.1) * 40, Color(1, 0.5, 0.2, 0.07), 1.2, true)
+	Art.icon(self, "anvil", sc - Vector2(3.5, 3.5) * 2.4, 2.4, Color(1, 0.5, 0.2, 0.1))
+	# griglie con brace sotto, ossa, catene
 	for i in 5:
-		var dp := Vector2(rng.randf_range(r.position.x + 12, r.end.x - 12), rng.randf_range(r.position.y + 20, r.end.y - 20))
+		var dp := Vector2(rng.randf_range(r.position.x + 14, r.end.x - 14), rng.randf_range(r.position.y + 24, r.end.y - 20))
 		var kind := rng.randi() % 3
 		if kind == 0:
 			var aa := rng.randf() * TAU
 			var dv := Vector2.from_angle(aa) * 5.0
-			draw_line(dp - dv, dp + dv, Color("cfc6b0", 0.55), 2.0, true)
-			draw_circle(dp - dv, 1.6, Color("cfc6b0", 0.55))
-			draw_circle(dp + dv, 1.6, Color("cfc6b0", 0.55))
+			draw_line(dp - dv, dp + dv, Color("bdb4a0", 0.5), 1.8, true)
+			draw_circle(dp - dv, 1.5, Color("bdb4a0", 0.5))
+			draw_circle(dp + dv, 1.5, Color("bdb4a0", 0.5))
 		elif kind == 1:
-			Art.rbox(self, Rect2(dp - Vector2(9, 6), Vector2(18, 12)), Color("1c1414"), Color("3a2c2a"), 2, 1)
+			Art.glow(self, dp, 16, Color(1, 0.4, 0.1, 0.25 * pulse))
+			draw_rect(Rect2(dp - Vector2(9, 6), Vector2(18, 12)), Color("1a0a06"))
+			draw_rect(Rect2(dp - Vector2(7, 4), Vector2(14, 8)), Color(1, 0.35, 0.05, 0.35 * pulse))
+			draw_rect(Rect2(dp - Vector2(9, 6), Vector2(18, 12)), Color("4a4450"), false, 1.5)
 			for j in 4:
-				draw_line(dp + Vector2(-6 + j * 4, -5), dp + Vector2(-6 + j * 4, 5), Color("4a3c38"), 1.2, true)
+				draw_line(dp + Vector2(-6 + j * 4, -5), dp + Vector2(-6 + j * 4, 5), Color("4a4450"), 1.4, true)
 		else:
-			for j in 4:
-				draw_circle(dp + Vector2(rng.randf_range(-6, 6), rng.randf_range(-4, 4)), rng.randf_range(2.0, 4.0), Color(0, 0, 0, 0.12))
-	# muro in alto con mattoni
+			for j in 5:
+				var cp := dp + Vector2(j * 3.2, sin(j * 1.3) * 1.5)
+				draw_arc(cp, 1.6, 0, TAU, 8, Color("5a5660", 0.7), 1.0, true)
+	# muro in alto: pietra scura, stendardi, torce in ferro
 	var wall := Rect2(r.position.x - WALL_SIZE, r.position.y - TOP_WALL, r.size.x + WALL_SIZE * 2, TOP_WALL)
-	draw_rect(wall, Color("3a2c2c"))
+	Art.grad_poly(self, PackedVector2Array([wall.position, Vector2(wall.end.x, wall.position.y), wall.end, Vector2(wall.position.x, wall.end.y)]), Color("1e1a22"), Color("2c2630"))
 	var bh := TOP_WALL / 3.0
 	for row in 3:
 		var y0 := wall.position.y + row * bh
-		var offx := 0.0 if row % 2 == 0 else 11.0
-		var x := wall.position.x - offx
+		var ox := 0.0 if row % 2 == 0 else 13.0
+		var x := wall.position.x - ox
 		while x < wall.end.x:
-			var br := Rect2(x + 1, y0 + 1, 21, bh - 2).intersection(wall)
+			var br := Rect2(x + 1, y0 + 1, 25, bh - 2).intersection(wall)
 			if br.size.x > 0:
-				draw_rect(br, Color("4e3b38").lerp(Color("5a4541"), rng.randf()))
-				draw_rect(Rect2(br.position, Vector2(br.size.x, 1)), Color(1, 1, 1, 0.06))
-			x += 22
-	draw_rect(Rect2(wall.position.x, wall.end.y - 2, wall.size.x, 2), Color(0, 0, 0, 0.4))
-	draw_rect(Rect2(r.position.x, r.position.y, r.size.x, 6), Color(0, 0, 0, 0.18))
-	# muri laterali e in basso
-	draw_rect(Rect2(r.position.x - WALL_SIZE, r.position.y, WALL_SIZE, r.size.y + WALL_SIZE), Color("2e2323"))
-	draw_rect(Rect2(r.end.x, r.position.y, WALL_SIZE, r.size.y + WALL_SIZE), Color("2e2323"))
-	draw_rect(Rect2(r.position.x, r.end.y, r.size.x, WALL_SIZE), Color("2e2323"))
-	draw_rect(Rect2(r.position.x - 1, r.position.y, 1, r.size.y), Color(0, 0, 0, 0.5))
-	draw_rect(Rect2(r.end.x, r.position.y, 1, r.size.y), Color(0, 0, 0, 0.5))
-	# torce
-	for f in [0.12, 0.32, 0.68, 0.88]:
+				draw_rect(br, Color("2e2832").lerp(Color("3a3340"), rng.randf()))
+				draw_line(br.position, Vector2(br.end.x, br.position.y), Color(1, 1, 1, 0.05), 1.0)
+			x += 26
+	draw_rect(Rect2(wall.position.x, wall.end.y - 3, wall.size.x, 3), Color("4a4450"))
+	draw_rect(Rect2(wall.position.x, wall.end.y, wall.size.x, 1), Art.INK)
+	draw_rect(Rect2(r.position.x, r.position.y + 1, r.size.x, 8), Color(0, 0, 0, 0.3))
+	# stendardi
+	for f in [0.22, 0.78]:
+		var bx: float = r.position.x + r.size.x * f
+		var sway := sin(time * 1.5 + f * 9.0) * 0.8
+		var ban := [Vector2(bx - 7, wall.position.y + 2), Vector2(bx + 7, wall.position.y + 2), Vector2(bx + 7 + sway, wall.end.y + 6), Vector2(bx + sway, wall.end.y + 2), Vector2(bx - 7 + sway, wall.end.y + 6)]
+		_gp(ban, Color("7a1c26"), Color("3e0c14"), 1.2)
+		draw_line(Vector2(bx - 8, wall.position.y + 2), Vector2(bx + 8, wall.position.y + 2), Art.GOLD, 1.4)
+		Art.icon(self, "anvil", Vector2(bx - 4.5 + sway * 0.5, wall.position.y + 9), 1.3, Art.GOLD)
+	# muri laterali
+	for wx in [r.position.x - WALL_SIZE, r.end.x]:
+		Art.grad_poly(self, PackedVector2Array([Vector2(wx, r.position.y), Vector2(wx + WALL_SIZE, r.position.y), Vector2(wx + WALL_SIZE, r.end.y + WALL_SIZE), Vector2(wx, r.end.y + WALL_SIZE)]), Color("221e26"), Color("16131a"))
+	draw_rect(Rect2(r.position.x - 1.5, r.position.y, 1.5, r.size.y), Color("4a4450"))
+	draw_rect(Rect2(r.end.x, r.position.y, 1.5, r.size.y), Color("4a4450"))
+	draw_rect(Rect2(r.position.x, r.end.y, r.size.x, WALL_SIZE), Color("16131a"))
+	# torce (la luce si disegna dopo il buio)
+	for f in [0.08, 0.4, 0.6, 0.92]:
 		var tx: float = r.position.x + r.size.x * f
-		var ty := wall.position.y + TOP_WALL * 0.45
-		var fl := 0.8 + 0.2 * sin(time * 11.0 + tx)
-		draw_rect(Rect2(tx - 1.5, ty, 3, 7), Color("6b3d22"))
-		draw_circle(Vector2(tx, ty - 1), 3.0 * fl, Color("ff8a2b"))
-		draw_circle(Vector2(tx, ty - 1.5), 1.6 * fl, Color("ffe14a"))
-	# cancello
+		var ty := TOP_WALL * 0.45
+		draw_line(Vector2(tx, ty + 7), Vector2(tx, ty + 1), Color("3a3440"), 2.0)
+		draw_rect(Rect2(tx - 2.5, ty - 1, 5, 2.5), Color("5a5460"))
+	# cancello: arco di pietra con saracinesca di ferro
 	var d := _door_rect()
 	var gc := Vector2(d.get_center().x, d.position.y + 10)
-	draw_circle(gc, 20, OUT)
-	draw_circle(gc, 18, Color("3a2c2c"))
-	draw_rect(Rect2(d.position.x - 2, gc.y, d.size.x + 4, d.end.y - gc.y), OUT)
+	draw_circle(gc, 21, Art.INK)
+	draw_circle(gc, 19, Color("3e3844"))
+	draw_rect(Rect2(d.position.x - 3, gc.y, d.size.x + 6, d.end.y - gc.y), Art.INK)
+	draw_rect(Rect2(d.position.x - 1, gc.y, d.size.x + 2, d.end.y - gc.y), Color("3e3844"))
 	var inner := Rect2(d.position.x + 2, gc.y, d.size.x - 4, d.end.y - gc.y)
-	draw_circle(gc, 15, Color("120a0a"))
-	draw_rect(inner, Color("120a0a"))
+	draw_circle(gc, 15, Color("07050a"))
+	draw_rect(inner, Color("07050a"))
 	if door_open:
-		Art.glow(self, Vector2(gc.x, d.end.y - 4), 26, Color(1, 0.6, 0.25, 0.5 + 0.2 * sin(time * 4.0)))
-		var ay := r.position.y + 14 + 3 * sin(time * 6.0)
-		_poly([Vector2(gc.x, ay - 6), Vector2(gc.x + 7, ay + 2), Vector2(gc.x - 7, ay + 2)], Color("ffe14a"))
+		Art.glow(self, Vector2(gc.x, d.end.y - 2), 30, Color(1, 0.6, 0.25, 0.6 + 0.2 * sin(time * 4.0)))
+		var ay := r.position.y + 12 + 3 * sin(time * 6.0)
+		_poly([Vector2(gc.x, ay - 6), Vector2(gc.x + 7, ay + 2), Vector2(gc.x - 7, ay + 2)], Art.GOLD)
 	else:
 		for i in 5:
 			var bx := inner.position.x + 3 + i * (inner.size.x - 6) / 4.0
-			draw_line(Vector2(bx, gc.y - 12 + absf(i - 2) * 2), Vector2(bx, d.end.y), Color("6a6070"), 2.0, true)
-		draw_line(Vector2(inner.position.x, gc.y + 2), Vector2(inner.end.x, gc.y + 2), Color("6a6070"), 2.0, true)
+			draw_line(Vector2(bx, gc.y - 12 + absf(i - 2) * 2), Vector2(bx, d.end.y), Color("6a6474"), 2.2, true)
+			draw_circle(Vector2(bx, d.end.y - 1), 1.4, Color("8a8494"))
+		for yy in [gc.y + 2, gc.y + 9]:
+			draw_line(Vector2(inner.position.x, yy), Vector2(inner.end.x, yy), Color("6a6474"), 2.0, true)
 
 func _poly(pts: Array, col: Color, outline: bool = true) -> void:
 	var p := PackedVector2Array(pts)
@@ -2069,16 +2094,23 @@ func _draw_rocks_base() -> void:
 		var rr: Rect2 = o
 		Art.rbox(self, Rect2(rr.position + Vector2(3, 3), rr.size), Color(0, 0, 0, 0.3), Color(0, 0, 0, 0), 7)
 
-## Colonna di roccia in vista 3/4: faccia frontale scura, cima chiara
+## Pilastro di ossidiana con fasce di ferro e cima incandescente
 func _draw_rock(rr: Rect2) -> void:
-	Art.rbox(self, Rect2(rr.position + Vector2(0, -8), rr.size + Vector2(0, 8)), Color("3a2e2c"), OUT, 6, 2)
-	for i in 3:
-		draw_line(Vector2(rr.position.x + 5 + i * 8, rr.end.y - 9), Vector2(rr.position.x + 5 + i * 8, rr.end.y - 2), Color(0, 0, 0, 0.25), 1.0, true)
-	Art.rbox(self, Rect2(rr.position + Vector2(0, -10), Vector2(rr.size.x, rr.size.y - 4)), Color("6e5c56"), OUT, 6, 2)
-	Art.rbox(self, Rect2(rr.position + Vector2(3, -8), Vector2(rr.size.x - 6, 5)), Color("8a766e"), Color(0, 0, 0, 0), 3)
-	var c := rr.get_center() + Vector2(0, -6)
-	draw_polyline(PackedVector2Array([c + Vector2(-3, -6), c + Vector2(1, -1), c + Vector2(-2, 3), c + Vector2(1, 6)]), Color("3a2c2a"), 1.2, true)
-	draw_circle(rr.position + Vector2(rr.size.x - 6, 0), 2.0, Color("6a9a4a"))
+	var front := Rect2(rr.position + Vector2(0, -8), rr.size + Vector2(0, 8))
+	Art.grad_poly(self, Art.cut_pts(front, 4), Color("26222c"), Color("121016"))
+	Art.outline(self, Art.cut_pts(front, 4), Art.INK, 2.0)
+	for yy in [front.end.y - 7, front.end.y - 14]:
+		draw_line(Vector2(front.position.x + 1, yy), Vector2(front.end.x - 1, yy), Color("4a4450"), 2.0)
+		draw_circle(Vector2(front.position.x + 4, yy), 1.0, Art.BRONZE)
+		draw_circle(Vector2(front.end.x - 4, yy), 1.0, Art.BRONZE)
+	var top := Rect2(rr.position + Vector2(0, -10), Vector2(rr.size.x, rr.size.y - 6))
+	Art.grad_poly(self, Art.cut_pts(top, 5), Color("4a4452"), Color("2a2630"))
+	Art.outline(self, Art.cut_pts(top, 5), Art.INK, 2.0)
+	var c := top.get_center()
+	var pl := 0.55 + 0.45 * sin(time * 2.5 + rr.position.x)
+	Art.glow(self, c, 12, Color(1, 0.4, 0.1, 0.3 * pl))
+	draw_polyline(PackedVector2Array([c + Vector2(-6, -3), c + Vector2(-1, 0), c + Vector2(-2, 3), c + Vector2(5, 4)]), Color(1, 0.5, 0.15, pl), 1.2, true)
+	draw_line(top.position + Vector2(5, 1.5), Vector2(top.end.x - 5, top.position.y + 1.5), Color(1, 1, 1, 0.12), 1.0)
 
 func _draw_vignette() -> void:
 	var s := _size()
@@ -2148,15 +2180,137 @@ func _draw_drop(d: Dictionary) -> void:
 # ---------------------------------------------------------------------
 func _enemy_color(e: Dictionary) -> Color:
 	match e.k:
-		"zombie": return Color("8ab07a")
-		"archer": return Color("f0ecdc")
-		"golem": return Color("9a9aa8")
-		"pebble": return Color("b0a898")
-		"imp": return Color("ff6a2a")
-		"spitter": return Color("d0402a")
-		"miniboss": return Color("8a8a9a")
-		"boss": return Color("5a2438")
+		"zombie": return Color("5e6a50")
+		"archer": return Color("d6ccb4")
+		"golem": return Color("6a6070")
+		"pebble": return Color("7a7080")
+		"imp": return Color("e0521a")
+		"spitter": return Color("5a2a20")
+		"miniboss": return Color("605868")
+		"boss": return Color("3a1020")
 	return Color.WHITE
+
+func _gp(pts: Array, top: Color, bot: Color, w: float = 1.6) -> void:
+	HeroArt._gpoly(self, pts, top, bot, w)
+
+func _slit_eyes(c: Vector2, look: Vector2, sep: float, ln: float, col: Color) -> void:
+	for sx in [-1.0, 1.0]:
+		var ep := c + Vector2(sx * sep + look.x * 1.2, look.y * 0.8)
+		Art.glow(self, ep, ln * 2.2, Color(col, 0.55))
+		draw_line(ep - Vector2(ln * 0.5, -sx * ln * 0.18), ep + Vector2(ln * 0.5, sx * ln * 0.18), col, maxf(1.2, ln * 0.32), true)
+
+## Nemici in stile "forgia oscura": niente occhioni, sagome adulte, crepe incandescenti
+func _draw_enemy_body(e: Dictionary, bc: Vector2, r: float, col: Color, look: Vector2) -> void:
+	var lx := look.x
+	var pulse := 0.6 + 0.4 * sin(time * 4.0 + bc.x)
+	match e.k:
+		"zombie":
+			var lean := Vector2(lx * 2.0, 0)
+			for sx in [-1.0, 1.0]:
+				var sh := bc + Vector2(sx * r * 0.55, -r * 0.25)
+				var hand := sh + look * r * 0.9 + Vector2(sx * 2, 0)
+				draw_line(sh, hand, OUT, 3.6, true)
+				draw_line(sh, hand, col.lightened(0.15), 2.0, true)
+				for f in 3:
+					draw_line(hand, hand + (look.rotated((f - 1) * 0.4)) * 3.0, Color("c8c0a8"), 1.0, true)
+			_gp([bc + Vector2(-r * 0.7, -r * 0.5) + lean, bc + Vector2(r * 0.7, -r * 0.5) + lean, bc + Vector2(r * 0.6, r * 0.6), bc + Vector2(r * 0.2, r * 0.45), bc + Vector2(-r * 0.1, r * 0.7), bc + Vector2(-r * 0.6, r * 0.55)], col.lightened(0.1), col.darkened(0.45))
+			draw_line(bc + Vector2(-r * 0.4, 0), bc + Vector2(r * 0.3, r * 0.15), Color(0, 0, 0, 0.3), 1.0, true)
+			var hc := bc + Vector2(lx * r * 0.25, -r * 0.75)
+			_gp([hc + Vector2(-r * 0.42, -r * 0.3), hc + Vector2(0, -r * 0.5), hc + Vector2(r * 0.42, -r * 0.3), hc + Vector2(r * 0.36, r * 0.32), hc + Vector2(-r * 0.36, r * 0.32)], Color("9aa088"), Color("5a6050"), 1.4)
+			_slit_eyes(hc, look, r * 0.17, r * 0.22, Color("ffa040"))
+			draw_line(hc + Vector2(-r * 0.2, r * 0.22), hc + Vector2(r * 0.2, r * 0.22), OUT, 1.2, true)
+		"archer":
+			var hood := bc + Vector2(0, -r * 0.55)
+			_gp([hood + Vector2(-r * 0.62, r * 0.4), hood + Vector2(-r * 0.5, -r * 0.45), hood + Vector2(0, -r * 0.75), hood + Vector2(r * 0.5, -r * 0.45), hood + Vector2(r * 0.62, r * 0.4)], Color("3a3040"), Color("1a1420"), 1.4)
+			draw_line(bc + Vector2(0, -r * 0.1), bc + Vector2(0, r * 0.7), OUT, 2.6, true)
+			draw_line(bc + Vector2(0, -r * 0.1), bc + Vector2(0, r * 0.7), col, 1.4, true)
+			for i in 3:
+				var ry := -r * 0.05 + i * r * 0.22
+				draw_arc(bc + Vector2(0, ry), r * (0.45 - i * 0.06), PI * 0.15, PI * 0.85, 8, OUT, 2.4, true)
+				draw_arc(bc + Vector2(0, ry), r * (0.45 - i * 0.06), PI * 0.15, PI * 0.85, 8, col, 1.2, true)
+			var sk := hood + Vector2(lx * 1.5, r * 0.05)
+			_gp([sk + Vector2(-r * 0.36, -r * 0.2), sk + Vector2(0, -r * 0.42), sk + Vector2(r * 0.36, -r * 0.2), sk + Vector2(r * 0.3, r * 0.22), sk + Vector2(r * 0.12, r * 0.38), sk + Vector2(-r * 0.12, r * 0.38), sk + Vector2(-r * 0.3, r * 0.22)], col.lightened(0.1), col.darkened(0.25), 1.3)
+			for sx in [-1.0, 1.0]:
+				draw_circle(sk + Vector2(sx * r * 0.15, 0), r * 0.11, OUT)
+				Art.glow(self, sk + Vector2(sx * r * 0.15, 0), r * 0.3, Color(1, 0.2, 0.15, 0.7))
+				draw_circle(sk + Vector2(sx * r * 0.15, 0), r * 0.045, Color("ff4a3a"))
+			var bp := bc + look * r * 0.85
+			draw_arc(bp, r * 0.75, look.angle() - 1.2, look.angle() + 1.2, 12, OUT, 3.2, true)
+			draw_arc(bp, r * 0.75, look.angle() - 1.2, look.angle() + 1.2, 12, Color("5a3a24"), 1.8, true)
+		"golem", "miniboss":
+			var big: bool = e.k == "miniboss"
+			for sx in [-1.0, 1.0]:
+				var fist := bc + Vector2(sx * r * 0.95, r * 0.15) + look * r * 0.15
+				_gp([fist + Vector2(-r * 0.25, -r * 0.25), fist + Vector2(r * 0.25, -r * 0.25), fist + Vector2(r * 0.3, r * 0.22), fist + Vector2(-r * 0.3, r * 0.22)], col.lightened(0.15), col.darkened(0.4))
+			var body := [bc + Vector2(-r * 0.8, -r * 0.55), bc + Vector2(-r * 0.35, -r * 0.9), bc + Vector2(r * 0.4, -r * 0.88), bc + Vector2(r * 0.82, -r * 0.5), bc + Vector2(r * 0.75, r * 0.55), bc + Vector2(r * 0.2, r * 0.8), bc + Vector2(-r * 0.55, r * 0.7)]
+			_gp(body, col.lightened(0.22), col.darkened(0.45), 2.0)
+			var lava := Color(1, 0.45, 0.1, pulse)
+			Art.glow(self, bc + Vector2(0, r * 0.1), r * 1.1, Color(1, 0.4, 0.1, 0.25 * pulse))
+			draw_polyline(PackedVector2Array([bc + Vector2(-r * 0.5, -r * 0.4), bc + Vector2(-r * 0.15, 0), bc + Vector2(-r * 0.35, r * 0.45)]), lava, 1.4, true)
+			draw_polyline(PackedVector2Array([bc + Vector2(r * 0.3, -r * 0.6), bc + Vector2(r * 0.1, -r * 0.15), bc + Vector2(r * 0.45, r * 0.3)]), lava, 1.4, true)
+			var hc := bc + Vector2(lx * r * 0.15, -r * 0.45)
+			draw_rect(Rect2(hc - Vector2(r * 0.32, r * 0.1), Vector2(r * 0.64, r * 0.2)), OUT)
+			Art.glow(self, hc, r * 0.55, Color(1, 0.7, 0.2, 0.8))
+			draw_line(hc - Vector2(r * 0.25, 0), hc + Vector2(r * 0.25, 0), Color("ffd060"), 1.6, true)
+			if big:
+				for i in 4:
+					var sp := bc + Vector2(-r * 0.55 + i * r * 0.37, -r * 0.85)
+					_gp([sp + Vector2(-r * 0.1, 0), sp + Vector2(0, -r * 0.35), sp + Vector2(r * 0.1, 0)], Color("6a6474"), Color("2a2630"), 1.2)
+		"pebble":
+			var core := bc + Vector2(0, -r * 0.2)
+			Art.glow(self, core, r * 1.2, Color(1, 0.5, 0.15, 0.4 * pulse))
+			for i in 3:
+				var aa := time * 1.6 + i * TAU / 3.0
+				var sp := core + Vector2(cos(aa) * r * 0.55, sin(aa) * r * 0.3)
+				_gp([sp + Vector2(-r * 0.32, -r * 0.1), sp + Vector2(-r * 0.05, -r * 0.4), sp + Vector2(r * 0.3, -r * 0.15), sp + Vector2(r * 0.2, r * 0.3), sp + Vector2(-r * 0.25, r * 0.25)], col.lightened(0.25), col.darkened(0.4), 1.4)
+			draw_circle(core, r * 0.26, OUT)
+			draw_circle(core, r * 0.2, Color("ffb040"))
+			draw_circle(core + look * r * 0.06, r * 0.09, Color("fff0c0"))
+		"imp":
+			var fl := sin(time * 14.0 + bc.y) * 1.5
+			Art.glow(self, bc, r * 2.0, Color(1, 0.4, 0.1, 0.35))
+			for sx in [-1.0, 1.0]:
+				var wb := bc + Vector2(sx * r * 0.4, -r * 0.2)
+				var flap := sin(time * 18.0) * r * 0.2
+				_gp([wb, wb + Vector2(sx * r * 1.2, -r * 0.7 - flap), wb + Vector2(sx * r * 1.0, -r * 0.1), wb + Vector2(sx * r * 1.15, r * 0.25 - flap * 0.5), wb + Vector2(sx * r * 0.3, r * 0.3)], Color("5a1a14"), Color("2a0a08"), 1.2)
+			_gp([bc + Vector2(-r * 0.6, -r * 0.1), bc + Vector2(-r * 0.3, -r * 0.75), bc + Vector2(0, -r * 0.55 + fl), bc + Vector2(r * 0.3, -r * 0.75), bc + Vector2(r * 0.6, -r * 0.1), bc + Vector2(r * 0.35, r * 0.6), bc + Vector2(0, r * 0.85 + fl), bc + Vector2(-r * 0.35, r * 0.6)], Color("ffb040"), Color("b0300c"), 1.6)
+			for sx in [-1.0, 1.0]:
+				_gp([bc + Vector2(sx * r * 0.25, -r * 0.6), bc + Vector2(sx * r * 0.6, -r * 1.15), bc + Vector2(sx * r * 0.42, -r * 0.5)], Color("e8dcc8"), Color("6a5a48"), 1.0)
+			_slit_eyes(bc + Vector2(0, -r * 0.2), look, r * 0.2, r * 0.26, Color("fff060"))
+		"spitter":
+			var body := [bc + Vector2(-r * 0.95, r * 0.4), bc + Vector2(-r * 0.75, -r * 0.35), bc + Vector2(-r * 0.2, -r * 0.65), bc + Vector2(r * 0.25, -r * 0.65), bc + Vector2(r * 0.78, -r * 0.35), bc + Vector2(r * 0.95, r * 0.4), bc + Vector2(r * 0.4, r * 0.7), bc + Vector2(-r * 0.4, r * 0.7)]
+			_gp(body, col.lightened(0.2), col.darkened(0.5), 1.8)
+			for i in 4:
+				var cp := bc + Vector2(-r * 0.55 + i * r * 0.36, -r * 0.2 + (i % 2) * r * 0.25)
+				Art.glow(self, cp, r * 0.3, Color(1, 0.45, 0.1, 0.5 * pulse))
+				draw_circle(cp, r * 0.08, Color(1, 0.6, 0.2, pulse))
+			var mouth := bc + Vector2(0, r * 0.25) + look * r * 0.25
+			Art.glow(self, mouth, r * 0.9, Color(1, 0.5, 0.1, 0.6))
+			HeroArt.ellipse(self, mouth, r * 0.42, r * 0.18, OUT)
+			HeroArt.ellipse(self, mouth, r * 0.34, r * 0.12, Color("ffb040"))
+			_slit_eyes(bc + Vector2(0, -r * 0.4), look, r * 0.35, r * 0.2, Color("ffe060"))
+		"boss":
+			var crown_col := Color("ff7a2a") if e.phase == 1 else Color("ffd84a")
+			Art.glow(self, bc, r * 2.4, Color(crown_col, 0.25 + 0.1 * pulse))
+			var robe := [bc + Vector2(-r * 0.55, -r * 0.5), bc + Vector2(r * 0.55, -r * 0.5), bc + Vector2(r * 0.9, r * 0.75), bc + Vector2(r * 0.55, r * 0.6), bc + Vector2(r * 0.3, r * 0.85), bc + Vector2(0, r * 0.65), bc + Vector2(-r * 0.3, r * 0.85), bc + Vector2(-r * 0.55, r * 0.6), bc + Vector2(-r * 0.9, r * 0.75)]
+			_gp(robe, Color("5a1828"), Color("14060c"), 2.0)
+			for sx in [-1.0, 1.0]:
+				var sh := bc + Vector2(sx * r * 0.55, -r * 0.35)
+				var hand := sh + Vector2(sx * r * 0.35, r * 0.35) + look * r * 0.2
+				draw_line(sh, hand, OUT, 4.5, true)
+				draw_line(sh, hand, Color("3a1020"), 3.0, true)
+				Art.glow(self, hand, r * 0.4, Color(crown_col, 0.6))
+				draw_circle(hand, r * 0.1, crown_col)
+			var hc := bc + Vector2(0, -r * 0.62)
+			_gp([hc + Vector2(-r * 0.32, -r * 0.3), hc + Vector2(r * 0.32, -r * 0.3), hc + Vector2(r * 0.28, r * 0.15), hc + Vector2(0, r * 0.42), hc + Vector2(-r * 0.28, r * 0.15)], Color("e8dcc4"), Color("8a7c68"), 1.6)
+			_slit_eyes(hc + Vector2(0, -r * 0.05), look, r * 0.13, r * 0.16, crown_col)
+			var pts: Array = [hc + Vector2(-r * 0.4, -r * 0.25)]
+			for i in 5:
+				var x := -r * 0.4 + i * r * 0.2
+				pts.append(hc + Vector2(x + r * 0.1, -r * (0.75 + (0.25 if i % 2 == 0 else 0.05)) - sin(time * 9.0 + i) * 2.5))
+				pts.append(hc + Vector2(x + r * 0.2, -r * 0.4))
+			pts.append(hc + Vector2(r * 0.4, -r * 0.25))
+			_poly(pts, crown_col)
 
 func _draw_enemy_telegraph(e: Dictionary) -> void:
 	if e.spawn > 0.0:
@@ -2240,70 +2394,16 @@ func _draw_enemy(e: Dictionary) -> void:
 	var squash: float = 1.0 + sin(time * 7.0 + c.y) * 0.05 - e.flash * 0.18
 	var bc := c + Vector2(0, bob)
 	# piedi che camminano
-	if e.k in ["zombie", "archer", "spitter", "golem", "pebble", "miniboss", "boss"]:
-		var fc := col.darkened(0.45)
-		var stp := sin(time * 12.0 + c.x) * (r * 0.25 if moving else 0.0)
+	if e.k in ["zombie", "archer", "golem", "miniboss"]:
+		var fc := col.darkened(0.55)
+		var stp: float = sin(time * 12.0 + c.x) * (r * 0.22 if moving else 0.0)
 		for sx in [-1.0, 1.0]:
-			var fp := c + Vector2(sx * r * 0.45, r * 0.78 + stp * sx)
-			draw_circle(fp, r * 0.26 + 1.2, OUT)
-			draw_circle(fp, r * 0.26, fc)
-	match e.k:
-		"zombie":
-			_body(bc, r, col, squash)
-			draw_line(bc + Vector2(-r * 0.5, r * 0.45), bc + Vector2(r * 0.3, r * 0.55), OUT, 1.0, true)
-			for i in 3:
-				var x := -r * 0.35 + i * r * 0.3
-				draw_line(bc + Vector2(x, r * 0.38), bc + Vector2(x, r * 0.62), OUT, 1.0, true)
-			_eyes(bc + Vector2(0, -r * 0.15), look, r * 0.36, r * 0.26, Color("6a1a2a"), Color("e8f0c0"))
-		"archer":
-			# scheletro: teschio sopra, corpo stretto
-			draw_rect(Rect2(bc.x - r * 0.45, bc.y + r * 0.1, r * 0.9, r * 0.9), OUT)
-			draw_rect(Rect2(bc.x - r * 0.35, bc.y + r * 0.15, r * 0.7, r * 0.8), Color("d8d0b8"))
-			for i in 2:
-				draw_line(Vector2(bc.x - r * 0.3, bc.y + r * (0.4 + i * 0.25)), Vector2(bc.x + r * 0.3, bc.y + r * (0.4 + i * 0.25)), OUT, 1.0, true)
-			_body(bc + Vector2(0, -r * 0.35), r * 0.75, col)
-			_eyes(bc + Vector2(0, -r * 0.4), look * 0.4, r * 0.28, r * 0.2, Color("ff4a3a"), OUT)
-			var bp := bc + look * r * 0.9
-			draw_arc(bp, r * 0.7, look.angle() - 1.2, look.angle() + 1.2, 10, Color("8a6a40"), 2.0, true)
-		"golem", "pebble", "miniboss":
-			var rr := Rect2(bc - Vector2(r, r * 0.95), Vector2(r * 2, r * 1.9))
-			Art.rbox(self, rr, col, OUT, int(r * 0.45), 2)
-			Art.rbox(self, Rect2(rr.position + Vector2(2, 2), Vector2(rr.size.x - 4, rr.size.y * 0.45)), col.lightened(0.12), Color(0, 0, 0, 0), int(r * 0.4))
-			draw_polyline(PackedVector2Array([bc + Vector2(-r * 0.5, r * 0.1), bc + Vector2(-r * 0.2, r * 0.4), bc + Vector2(-r * 0.4, r * 0.8)]), col.darkened(0.4), 1.2, true)
-			draw_circle(bc + Vector2(r * 0.55, -r * 0.6), r * 0.18, Color("6a9a4a"))
-			var ec := bc + Vector2(0, -r * 0.2) + look * r * 0.12
-			for sx in [-1.0, 1.0]:
-				Art.glow(self, ec + Vector2(sx * r * 0.38, 0), r * 0.5, Color(1, 0.85, 0.3, 0.7))
-				draw_circle(ec + Vector2(sx * r * 0.38, 0), r * 0.13, Color("fff0a0"))
-			if e.k == "miniboss":
-				for i in 3:
-					draw_circle(bc + Vector2(-r * 0.6 + i * r * 0.6, -r * 0.95), r * 0.14, Color("6a9a4a"))
-		"imp":
-			var fl := sin(time * 14.0 + c.y) * 1.5
-			Art.glow(self, bc, r * 2.2, Color(1, 0.45, 0.1, 0.35))
-			_poly([bc + Vector2(-r * 0.8, -r * 0.1), bc + Vector2(-r * 0.4, -r * 1.3 + fl), bc + Vector2(0, -r * 0.7), bc + Vector2(r * 0.4, -r * 1.5 - fl), bc + Vector2(r * 0.8, -r * 0.1)], Color("ffb03a"))
-			_body(bc, r, col, squash)
-			_eyes(bc + Vector2(0, -r * 0.05), look, r * 0.34, r * 0.24, OUT, Color("fff0b0"))
-		"spitter":
-			_body(bc, r, col, squash)
-			draw_circle(bc + Vector2(0, r * 0.4) + look * 2, r * 0.3, OUT)
-			draw_circle(bc + Vector2(0, r * 0.4) + look * 2, r * 0.18, Color("ff8a2b"))
-			_eyes(bc + Vector2(0, -r * 0.25), look, r * 0.34, r * 0.22, OUT, Color("ffe0a0"))
-		"boss":
-			var glow_a := 0.35 + 0.15 * sin(time * 3.0)
-			Art.glow(self, bc, r * 2.4, Color(1, 0.4, 0.15, glow_a) if e.phase == 1 else Color(1, 0.9, 0.3, glow_a))
-			_body(bc, r, col, squash)
-			# corona di fiamme
-			var crown_col := Color("ff8a2b") if e.phase == 1 else Color("ffe14a")
-			var pts: Array = [bc + Vector2(-r * 0.6, -r * 0.7)]
-			for i in 5:
-				var x := -r * 0.6 + i * r * 0.3
-				pts.append(bc + Vector2(x + r * 0.15, -r * (1.25 + (0.25 if i % 2 == 0 else 0.0)) - sin(time * 9.0 + i) * 2.0))
-				pts.append(bc + Vector2(x + r * 0.3, -r * 0.85))
-			pts.append(bc + Vector2(r * 0.6, -r * 0.7))
-			_poly(pts, crown_col)
-			_eyes(bc + Vector2(0, -r * 0.05), look, r * 0.3, r * 0.2, Color("ff3a1a"), Color("ffe0c0"))
-			draw_arc(bc + Vector2(0, r * 0.35), r * 0.3, 0.3, PI - 0.3, 10, OUT, 2.0, true)
+			var fp := c + Vector2(sx * r * 0.42, r * 0.8 + stp * sx)
+			HeroArt.ellipse(self, fp, r * 0.3 + 1.2, r * 0.2 + 1.2, OUT)
+			HeroArt.ellipse(self, fp, r * 0.3, r * 0.2, fc)
+	_draw_enemy_body(e, bc, r, col, look)
+	if e.flash > 0.0:
+		HeroArt.ellipse(self, bc, r * 1.05, r * 1.1, Color(1, 1, 1, minf(0.85, e.flash)))
 	# stati
 	if e.slow > 0.0 or e.freeze > 0.0:
 		if e.freeze > 0.0:
@@ -2318,8 +2418,6 @@ func _draw_enemy(e: Dictionary) -> void:
 		for i in mini(e.pois, 5):
 			var bp := bc + Vector2(-r * 0.6 + i * r * 0.3, -r - 2 - fmod(time * 6.0 + i * 1.7, 4.0))
 			draw_circle(bp, 1.3, Data.EL_COLOR.poison)
-	if e.flash > 0.0:
-		draw_circle(bc, r + 1.5, Color(1, 1, 1, minf(1.0, e.flash * 1.1)))
 	if e.inv > 0.0 and fmod(time * 10.0, 2.0) < 1.0:
 		draw_circle(bc, r + 2, Color(1, 1, 0.6, 0.35))
 	# vita e debolezza
@@ -2331,110 +2429,25 @@ func _draw_enemy(e: Dictionary) -> void:
 			Art.rbox(self, Rect2(c.x - bw / 2.0 + 1, by + 1, (bw - 2) * clampf(e.hp / e.max, 0.0, 1.0), 2), Color("ffc531") if e.get("elite", false) else Color("ff3d5a"), Color(0, 0, 0, 0), 1)
 		Art.el_badge(self, _weak_of(e), Vector2(c.x, by - 7), 4.5)
 
-## Il fabbro guerriero: mantello, grembiule di cuoio, elmo con pennacchio di fiamma
+## Il Fabbro delle Ceneri (disegno condiviso con menu e titolo)
 func _draw_hero() -> void:
 	var blink := hero_inv > 0.0 and fmod(time * 16.0, 2.0) < 1.0
 	var moving := hero_vel.length() > 5.0
-	var ph := step_t * 1.6
-	var bob := absf(sin(ph)) * 1.8 if moving else sin(time * 3.0) * 0.5
-	var p := hero_pos
-	var c := p + Vector2(0, -bob)
-	var fx := facing
-	var back := fx.y < -0.55       # di spalle: si vede il mantello
-	# ombra
-	_xf(p + Vector2(0, 10), 0, Vector2(1, 0.38))
-	draw_circle(Vector2.ZERO, 11, Color(0, 0, 0, 0.38))
-	_xr()
 	var wc := _shot_color(_w())
 	if _w().slots != ["", ""]:
-		Art.glow(self, c, 26, Color(wc, 0.22))
+		Art.glow(self, hero_pos + Vector2(0, -4), 28, Color(wc, 0.2))
 	if blink:
-		return
-	# piedi
-	var stp := sin(ph) * 3.0 if moving else 0.0
-	for sx in [-1.0, 1.0]:
-		var fp := p + Vector2(sx * 4.0, 8.5 + stp * sx * 0.6)
-		draw_circle(fp, 3.2, OUT)
-		draw_circle(fp, 2.4, Color("3a2a22"))
-	# mantello (dietro, oppure davanti se di spalle)
-	var sway := sin(time * 5.0) * 1.0 - hero_vel.x * 0.03
-	var cape := [c + Vector2(-6, -3), c + Vector2(6, -3), c + Vector2(8 + sway, 9 + absf(sway) * 0.3), c + Vector2(0 + sway, 11), c + Vector2(-8 + sway, 9)]
-	if not back:
-		_poly(cape, Color("8a2436"))
-	# corpo con armatura
-	draw_circle(c + Vector2(0, 2), 8.6, OUT)
-	draw_circle(c + Vector2(0, 2), 7.4, Color("434266"))
-	draw_circle(c + Vector2(-2.5, -0.5), 2.2, Color(1, 1, 1, 0.18))
-	if not back:
-		# grembiule di cuoio con cintura e runa che brilla
-		_poly([c + Vector2(-4.5, 1), c + Vector2(4.5, 1), c + Vector2(4, 9), c + Vector2(-4, 9)], Color("8a5530"))
-		draw_line(c + Vector2(-6.5, 1.5), c + Vector2(6.5, 1.5), Color("c99a3a"), 1.6, true)
-		Art.glow(self, c + Vector2(0, 5), 5, Color(1, 0.6, 0.2, 0.6 + 0.3 * sin(time * 4.0)))
-		draw_circle(c + Vector2(0, 5), 1.1, Color("ffd36b"))
+		HeroArt.ellipse(self, hero_pos + Vector2(0, 9.5), 9.5, 3.4, Color(0, 0, 0, 0.42))
 	else:
-		_poly(cape, Color("8a2436"))
-		draw_line(c + Vector2(-2, 0), c + Vector2(1 + sway, 9), Color(0, 0, 0, 0.2), 1.0, true)
-	# spallacci
-	for sx in [-1.0, 1.0]:
-		var sp := c + Vector2(sx * 7.0, -1.0)
-		draw_circle(sp, 3.6, OUT)
-		draw_circle(sp, 2.7, Color("7a80a0"))
-		draw_circle(sp + Vector2(-0.8, -0.8), 1.0, Color(1, 1, 1, 0.35))
-	# testa ed elmo
-	var hc := c + Vector2(0, -7)
-	draw_circle(hc, 7.6, OUT)
-	draw_circle(hc, 6.4, Color("6a7090"))
-	draw_circle(hc + Vector2(0, 1.5), 5.6, Color("5a5f7c"))
-	draw_circle(hc + Vector2(-2.2, -2.5), 1.8, Color(1, 1, 1, 0.35))
-	if not back:
-		var vf := Vector2(fx.x * 2.0, maxf(fx.y, -0.4) * 1.2)
-		Art.rbox(self, Rect2(hc.x - 4.6 + vf.x, hc.y - 0.8 + vf.y, 9.2, 3.4), OUT, Color(0, 0, 0, 0), 2)
-		for sx in [-1.0, 1.0]:
-			var ep := hc + Vector2(sx * 2.0 + vf.x, 0.9 + vf.y)
-			Art.glow(self, ep, 3.5, Color(1, 0.7, 0.2, 0.8))
-			draw_circle(ep, 0.9, Color("ffe08a"))
-	# pennacchio di fiamma
-	var fl := sin(time * 11.0) * 1.2
-	_poly([hc + Vector2(-2, -5.5), hc + Vector2(0.5, -12.5 + fl), hc + Vector2(2.5, -9), hc + Vector2(5, -13 - fl), hc + Vector2(4, -5.5)], Color("ff5a2a"))
-	draw_circle(hc + Vector2(1.6, -7.5), 1.4, Color("ffd36b"))
-	# arma in mano (con rinculo)
-	# l'arma sta nella mano destra, di lato: non copre la testa
-	var side := Vector2(-fx.y, fx.x) * -6.0
-	if side.x < 0.0:
-		side = -side
-	var hand := c + fx * (7.0 - recoil * 2.0) + side * 0.9 + Vector2(0, 2)
-	var a := fx.angle()
-	match _w().key:
-		"sword":
-			var tip := hand + fx * 12
-			draw_line(hand, tip, OUT, 4.2, true)
-			draw_line(hand, tip, Color("e8ecf8"), 2.2, true)
-			draw_line(hand - fx.orthogonal() * 3.5, hand + fx.orthogonal() * 3.5, Color("c99a3a"), 2.2, true)
-			if wc != Data.WEAPONS.sword.color:
-				draw_line(hand + fx * 3, tip, Color(wc, 0.85), 1.2, true)
-		"bow":
-			draw_arc(hand, 7, a - 1.3, a + 1.3, 12, OUT, 3.8, true)
-			draw_arc(hand, 7, a - 1.3, a + 1.3, 12, Color("c8a070"), 2.2, true)
-			var pull := hand - fx * (2.5 * recoil)
-			draw_line(hand + Vector2.from_angle(a - 1.3) * 7, pull, Color(1, 1, 1, 0.75), 1.0, true)
-			draw_line(hand + Vector2.from_angle(a + 1.3) * 7, pull, Color(1, 1, 1, 0.75), 1.0, true)
-		"staff":
-			var top := hand + Vector2(fx.x * 4, -10)
-			draw_line(hand + Vector2(0, 6), top, OUT, 3.8, true)
-			draw_line(hand + Vector2(0, 6), top, Color("8a6a40"), 2.2, true)
-			Art.glow(self, top, 9 + recoil * 4, Color(wc, 0.75))
-			draw_circle(top, 3.0, OUT)
-			draw_circle(top, 2.3, wc)
-	if hero_flash > 0.0:
-		draw_circle(c, 11, Color(1, 0.25, 0.25, hero_flash * 0.55))
+		HeroArt.draw(self, hero_pos + Vector2(0, 9), facing, time, step_t * 1.6, moving, _w().key, wc, recoil, 1.0, hero_flash)
 	# barra della vita sopra l'eroe
+	var p := hero_pos
 	var bw := 30.0
-	var by := c.y - 30
+	var by := p.y - 40
 	var hk := float(hero_hp) / max_hp
-	var hcol := Art.GREEN if hk > 0.5 else (Color("ffd24a") if hk > 0.25 else Art.HP)
-	Art.rbox(self, Rect2(p.x - bw / 2.0, by, bw, 5), Color("10201a"), OUT, 3, 1)
-	Art.rbox(self, Rect2(p.x - bw / 2.0 + 1, by + 1, (bw - 2) * hk, 3), hcol, Color(0, 0, 0, 0), 2)
-	PixelFont.draw_centered(self, str(hero_hp), p.x, by - 11, 1, Color.WHITE, OUT)
+	var hcol := Art.GREEN if hk > 0.5 else (Color("e8c04a") if hk > 0.25 else Art.HP)
+	Art.bar(self, Rect2(p.x - bw / 2.0, by, bw, 3.5), hk, hcol)
+	PixelFont.draw_centered(self, str(hero_hp), p.x, by - 11, 1, Art.TEXT, OUT)
 
 func _draw_shot(s: Dictionary) -> void:
 	var col: Color = s.col
@@ -2489,89 +2502,93 @@ func _draw_bolt(a: Vector2, b: Vector2) -> void:
 # ---------------------------------------------------------------------
 func _draw_hud() -> void:
 	var s := _size()
-	draw_rect(Rect2(0, 0, s.x, HUD_H), Color("140f2a"))
+	Art.grad_poly(self, PackedVector2Array([Vector2(0, 0), Vector2(s.x, 0), Vector2(s.x, HUD_H), Vector2(0, HUD_H)]), Color("1c1a22"), Color("0e0c12"))
+	draw_line(Vector2(0, HUD_H - 1), Vector2(s.x, HUD_H - 1), Color("4a4450"), 1.0)
+	draw_line(Vector2(0, HUD_H), Vector2(s.x, HUD_H), Art.INK, 1.0)
 	var title := "Stanza %d/%d" % [room_n, Data.ROOMS]
 	if room_n == Data.BOSS_ROOM:
-		title += " · Boss"
+		title = "Boss · %d/%d" % [room_n, Data.ROOMS]
 	elif room_n == Data.MINIBOSS_ROOM:
-		title += " · Mini-boss"
+		title = "Mini-boss · %d/%d" % [room_n, Data.ROOMS]
 	elif room_n in Data.BIG_FORGE_ROOMS:
 		title += " · Fucina"
-	PixelFont.draw_text(self, title, Vector2(6, 3), 2, Color.WHITE, OUT)
-	# livello ed esperienza della partita
-	var lr := Rect2(5, 21, 30, 13)
-	Art.rbox(self, lr, Color("2f8a5a"), OUT, 6, 1)
-	PixelFont.draw_centered(self, "Lv %d" % lvl, lr.get_center().x, lr.position.y + 1, 1, Color.WHITE, OUT)
-	var xr := Rect2(38, 24, s.x - 44, 7)
-	Art.rbox(self, xr, Color(1, 1, 1, 0.08), OUT, 4, 1)
+	PixelFont.draw_text(self, title, Vector2(7, 3), 2, Art.TEXT, OUT)
+	# livello: rombo con numero, barra dell'esperienza
+	var lc := Vector2(16, 27)
+	var dia := PackedVector2Array([lc + Vector2(0, -8), lc + Vector2(9, 0), lc + Vector2(0, 8), lc + Vector2(-9, 0)])
+	Art.grad_poly(self, dia, Color("5fe0a0"), Color("1f7a50"))
+	Art.outline(self, dia, Art.INK, 2.0)
+	PixelFont.draw_centered(self, str(lvl), lc.x, lc.y - 5, 1, Art.INK)
 	var xk := clampf(float(xp) / Skills.xp_need(lvl), 0.0, 1.0)
-	if xk > 0.0:
-		Art.rbox(self, Rect2(xr.position + Vector2(1, 1), Vector2(maxf(4.0, (xr.size.x - 2) * xk), xr.size.y - 2)), Color("5ff0a0"), Color(0, 0, 0, 0), 3)
-	# monete a destra
-	var x := s.x - 30
-	for item in [["gem", run_gems, Art.GEM], ["gold", run_gold, Art.GOLD], ["spark", sparks, Color("ffb03a")]]:
+	Art.bar(self, Rect2(28, 25, s.x - 36, 4), xk, Color("5fe0a0"))
+	# risorse della partita
+	var x := s.x - 28
+	for item in [["gem", run_gems, Art.GEM], ["gold", run_gold, Art.GOLD], ["spark", sparks, Color("ff9a3a")]]:
 		var t := str(item[1])
 		var w := 18.0 + PixelFont.text_width(t, 1)
 		x -= w
-		Art.icon(self, item[0], Vector2(x, 5), 1.4, item[2])
-		PixelFont.draw_text(self, t, Vector2(x + 12, 5), 1, Color.WHITE, OUT)
-		x -= 2
+		Art.icon(self, item[0], Vector2(x, 6), 1.4, item[2])
+		PixelFont.draw_text(self, t, Vector2(x + 12, 6), 1, Art.TEXT, OUT)
+		x -= 3
 	var pr := _pause_rect()
-	Art.rbox(self, pr, Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.15), 5, 1)
-	draw_rect(Rect2(pr.position.x + 6, pr.position.y + 5, 2.5, 8), Color.WHITE)
-	draw_rect(Rect2(pr.position.x + 10, pr.position.y + 5, 2.5, 8), Color.WHITE)
-	# barra del boss
+	Art.plate(self, pr, Color("2e2a36"), Color("16131a"), Color("57525f"), 4.0)
+	draw_rect(Rect2(pr.position.x + 6, pr.position.y + 5, 2.2, 8), Art.TEXT)
+	draw_rect(Rect2(pr.position.x + 10, pr.position.y + 5, 2.2, 8), Art.TEXT)
+	# barra del boss: lunga, ornata
 	for e in enemies:
 		if e.boss and e.spawn <= 0.0:
-			var r := Rect2(24, HUD_H + TOP_WALL + 6, s.x - 48, 7)
-			Art.rbox(self, r.grow(1), Color("1a0c18"), OUT, 4, 1)
+			var r := Rect2(30, HUD_H + 10, s.x - 60, 7)
 			var k: float = clampf(e.hp / e.max, 0, 1)
-			Art.rbox(self, Rect2(r.position, Vector2(r.size.x * k, r.size.y)), Color("ff3d5a").lerp(Color("ffb03a"), 1.0 - k), Color(0, 0, 0, 0), 3)
-			var label: String = e.name.capitalize() if e.name != "" else ""
+			var frame := Art.cut_pts(r.grow(3), 4)
+			draw_colored_polygon(frame, Color(0, 0, 0, 0.7))
+			Art.outline(self, frame, Art.GOLD.darkened(0.3), 1.0)
+			Art.bar(self, r, k, Color("c02a2a").lerp(Color("ff7a2a"), 1.0 - k))
+			var label: String = PixelFont.nice(e.name) if e.name != "" else ""
 			if e.k == "boss":
-				label += " · Fase %d" % e.phase
-			PixelFont.draw_centered(self, label, s.x / 2.0, r.end.y + 3, 1, Color.WHITE, OUT)
+				label += " · fase %d" % e.phase
+			PixelFont.draw_centered(self, label, s.x / 2.0, r.end.y + 5, 1, Art.GOLD_L, OUT)
 			var weak := _weak_of(e)
-			Art.el_badge(self, weak if e.weak_known else "?", Vector2(r.end.x + 8, r.get_center().y), 6)
+			Art.el_badge(self, weak if e.weak_known else "?", Vector2(r.end.x + 14, r.get_center().y), 7)
 			break
 
+## Barra in basso: le due armi come lastre di ferro, e il pulsante Cambia
 func _draw_bar() -> void:
 	var s := _size()
 	var y0 := s.y - BAR_H
-	draw_rect(Rect2(0, y0, s.x, BAR_H), Color("140f2a"))
-	draw_rect(Rect2(0, y0, s.x, 1), Color(1, 1, 1, 0.08))
+	Art.grad_poly(self, PackedVector2Array([Vector2(0, y0), Vector2(s.x, y0), Vector2(s.x, s.y), Vector2(0, s.y)]), Color("1c1a22"), Color("09080c"))
+	draw_line(Vector2(0, y0), Vector2(s.x, y0), Art.INK, 1.0)
+	draw_line(Vector2(0, y0 + 1), Vector2(s.x, y0 + 1), Color("4a4450"), 1.0)
 	for i in weapons.size():
 		var w: Dictionary = weapons[i]
 		var wd: Dictionary = Data.WEAPONS[w.key]
-		var r := Rect2(6 + i * 79, y0 + 6, 75, BAR_H - 12)
+		var r := Rect2(6 + i * 79, y0 + 7, 75, BAR_H - 14)
 		var cur := i == cur_w
-		Art.rbox(self, r, Color("3d2d78") if cur else Color("1b1535"), Color("ffd36b") if cur else Color(1, 1, 1, 0.1), 8, 2 if cur else 1)
-		Art.icon(self, w.key, r.position + Vector2(5, 5), 2.0, wd.color if cur else Art.TEXT_DIM)
-		PixelFont.draw_text(self, wd.name, r.position + Vector2(24, 4), 1, Color.WHITE if cur else Art.TEXT_DIM)
+		if cur:
+			Art.glow(self, r.get_center(), 50, Color(1, 0.55, 0.2, 0.15))
+		Art.plate(self, r, Color("3a3442") if cur else Color("221e28"), Color("17141b") if cur else Color("100e13"), Art.GOLD if cur else Color("3a3640"), 6.0)
+		Art.icon(self, w.key, r.position + Vector2(6, 6), 2.0, wd.color if cur else Color("6e6874"))
+		PixelFont.draw_text(self, wd.name, r.position + Vector2(25, 5), 1, Art.TEXT if cur else Color("8a8490"))
 		for si in 2:
-			var sr := Rect2(r.position.x + 24 + si * 15, r.position.y + 16, 13, 13)
-			Art.rbox(self, sr, Color(0, 0, 0, 0.4), Color(1, 1, 1, 0.12), 4, 1)
+			var sr := Rect2(r.position.x + 25 + si * 16, r.position.y + 17, 14, 14)
+			var sp := Art.cut_pts(sr, 3)
+			draw_colored_polygon(sp, Color(0, 0, 0, 0.55))
+			Art.outline(self, sp, Color("57525f") if cur else Color("3a3640"), 1.0)
 			var el: String = w.slots[si]
 			if el != "":
-				Art.el_icon(self, el, sr.position + Vector2(2.3, 2.3), 1.2)
-		if w.slots[0] != "" and w.slots[1] != "":
-			var info := Data.slots_info(w.slots, Save.recipes)
-			var nm: String = PixelFont.nice(info[0])
-			if PixelFont.text_width(nm, 1) > r.size.x - 8:
-				nm = nm.substr(0, 10) + "."
-			PixelFont.draw_text(self, nm, r.position + Vector2(5, r.size.y - 11), 1, _shot_color(w))
+				Art.glow(self, sr.get_center(), 8, Color(Data.EL_COLOR[el], 0.4))
+				Art.el_icon(self, el, sr.position + Vector2(2.6, 2.6), 1.25)
 	var sr := _switch_rect()
 	var ready := switch_t <= 0.0
-	if ready and atk_t <= 0.0:
-		Art.glow(self, sr.get_center(), 60, Color(0.6, 0.5, 1.0, 0.18 + 0.08 * sin(time * 4.0)))
-	Art.button(self, sr, "", Color("7d6bff") if ready else Color("3a3070"), true)
+	if ready:
+		Art.glow(self, sr.get_center(), 60, Color(1, 0.5, 0.15, 0.16 + 0.08 * sin(time * 4.0)))
+	Art.button(self, sr, "", Art.MOLTEN if ready else Color("3a3440"), true)
 	var other: Dictionary = weapons[1 - cur_w] if weapons.size() > 1 else weapons[0]
-	Art.icon(self, other.key, sr.position + Vector2(8, 10), 2.8, Color.WHITE)
-	PixelFont.draw_text(self, "Cambia", sr.position + Vector2(38, 8), 2, Color.WHITE, Color(0, 0, 0, 0.3))
-	PixelFont.draw_text(self, Data.WEAPONS[other.key].name, sr.position + Vector2(38, 24), 1, Color("e0d8ff"))
+	Art.icon(self, other.key, sr.position + Vector2(8, 10), 2.6, Art.TEXT)
+	PixelFont.draw_text(self, "Cambia", sr.position + Vector2(36, 6), 2, Art.TEXT, Color(0, 0, 0, 0.5))
+	PixelFont.draw_text(self, "Colpo critico" if ready else Data.WEAPONS[other.key].name, sr.position + Vector2(36, 24), 1, Color("ffe0b0") if ready else Art.TEXT_DIM)
 	if not ready:
 		var k := switch_t / Data.SWITCH_COOLDOWN
-		Art.rbox(self, Rect2(sr.position, Vector2(sr.size.x * k, sr.size.y)), Color(0, 0, 0, 0.45), Color(0, 0, 0, 0), 8)
+		draw_colored_polygon(Art.cut_pts(Rect2(sr.position, Vector2(maxf(8.0, sr.size.x * k), sr.size.y)), 5), Color(0, 0, 0, 0.5))
 
 func _draw_banner() -> void:
 	var s := _size()
@@ -2583,9 +2600,9 @@ func _draw_banner() -> void:
 		var sc := 1.0 + maxf(0.0, banner_t - 1.8) * 2.5
 		draw_set_transform(Vector2(s.x / 2.0, y + 8), 0, Vector2(sc, sc))
 		# nastro con le code
-		_poly([Vector2(-w / 2.0 - 12, -8), Vector2(-w / 2.0, -8), Vector2(-w / 2.0, 14), Vector2(-w / 2.0 - 12, 14), Vector2(-w / 2.0 - 6, 3)], Color(0.55, 0.2, 0.12, a))
-		_poly([Vector2(w / 2.0 + 12, -8), Vector2(w / 2.0, -8), Vector2(w / 2.0, 14), Vector2(w / 2.0 + 12, 14), Vector2(w / 2.0 + 6, 3)], Color(0.55, 0.2, 0.12, a))
-		Art.rbox(self, Rect2(-w / 2.0, -14, w, 28), Color(0.1, 0.06, 0.18, 0.92 * a), Color(1, 0.75, 0.35, a), 8, 2)
+		_poly([Vector2(-w / 2.0 - 12, -8), Vector2(-w / 2.0, -8), Vector2(-w / 2.0, 14), Vector2(-w / 2.0 - 12, 14), Vector2(-w / 2.0 - 6, 3)], Color(0.42, 0.09, 0.13, a))
+		_poly([Vector2(w / 2.0 + 12, -8), Vector2(w / 2.0, -8), Vector2(w / 2.0, 14), Vector2(w / 2.0 + 12, 14), Vector2(w / 2.0 + 6, 3)], Color(0.42, 0.09, 0.13, a))
+		Art.plate(self, Rect2(-w / 2.0, -14, w, 28), Color(0.16, 0.13, 0.17, 0.95 * a), Color(0.06, 0.05, 0.07, 0.95 * a), Color(Art.GOLD, a), 6.0)
 		PixelFont.draw_centered(self, t, 0, -8, 2, Color(1, 1, 1, a), Color(OUT, a))
 		draw_set_transform(Vector2.ZERO)
 	var by := s.y - BAR_H
@@ -2596,10 +2613,8 @@ func _draw_banner() -> void:
 		PixelFont.draw_centered(self, "Vai all'incudine o esci dal cancello", s.x / 2.0, by - 22, 1, Color.WHITE, OUT)
 
 ## Carta in stile Braceforte 2
-func _card(r: Rect2, edge: Color = Color("a6a0c0")) -> void:
-	Art.rbox(self, Rect2(r.position + Vector2(0, 3), r.size), Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 12)
-	Art.rbox(self, r, Color("221a44"), edge, 12, 2)
-	Art.rbox(self, Rect2(r.position + Vector2(2, 2), Vector2(r.size.x - 4, r.size.y * 0.4)), Color(1, 1, 1, 0.03), Color(0, 0, 0, 0), 10)
+func _card(r: Rect2, edge: Color = Color("8e8898")) -> void:
+	Art.plate(self, r, Color("26222c"), Color("121016"), edge, 8.0, true)
 
 func _draw_forge() -> void:
 	var s := _size()
@@ -2624,7 +2639,7 @@ func _draw_forge() -> void:
 		var col: Color = Data.EL_COLOR[el]
 		var can: bool = sparks >= _price() and not o.sold
 		var sel := i == sel_offer
-		Art.rbox(self, r, Color("2a2150"), Color("5ab4ff") if sel else Color(col, 0.6 if can else 0.25), 10, 3 if sel else 2)
+		Art.rbox(self, r, Color("1e1b24"), Art.GOLD if sel else Color(col, 0.6 if can else 0.25), 10, 3 if sel else 2)
 		if o.sold:
 			PixelFont.draw_centered(self, "Preso", r.get_center().x, r.get_center().y - 5, 1, Art.TEXT_DIM)
 			continue
@@ -2645,7 +2660,7 @@ func _draw_forge() -> void:
 		var w: Dictionary = weapons[wi]
 		var wd: Dictionary = Data.WEAPONS[w.key]
 		var r := Rect2(pr.position.x + 10, wy + wi * 64, pr.size.x - 20, 58)
-		Art.rbox(self, r, Color("1b1535"), Color(1, 1, 1, 0.1), 10, 1)
+		Art.rbox(self, r, Color("17141b"), Color(1, 1, 1, 0.1), 10, 1)
 		Art.icon(self, w.key, r.position + Vector2(8, 8), 2.6, wd.color)
 		PixelFont.draw_text(self, wd.name, r.position + Vector2(6, 32), 1, Color.WHITE)
 		for si in 2:
@@ -2672,7 +2687,7 @@ func _draw_forge() -> void:
 		PixelFont.draw_centered(self, "Tocca un incastro pieno per toglierlo (torna metà prezzo)", s.x / 2.0, by - 14, 1, Art.TEXT_DIM)
 		var rr := Rect2(pr.position.x + 10, by, 120, 26)
 		ui_rects["reroll"] = rr
-		Art.button(self, rr, "Cambia (%d)" % Data.REROLL_PRICE, Color("7d6bff"), sparks >= Data.REROLL_PRICE)
+		Art.button(self, rr, "Cambia (%d)" % Data.REROLL_PRICE, Art.STEEL, sparks >= Data.REROLL_PRICE)
 		var er := Rect2(pr.end.x - 10 - 100, by, 100, 26)
 		ui_rects["exit"] = er
 		Art.button(self, er, "Esci", Color("1fa65a"))
@@ -2720,7 +2735,7 @@ func _draw_strike() -> void:
 	PixelFont.draw_centered(self, "Colpisci al momento giusto!", s.x / 2.0, r.position.y + 10, 2, Color("ffd36b"), OUT)
 	PixelFont.draw_centered(self, "Tocca quando il martello è nell'oro", s.x / 2.0, r.position.y + 28, 1, Art.TEXT_DIM)
 	var bar := Rect2(r.position.x + 16, r.position.y + 64, r.size.x - 32, 14)
-	Art.rbox(self, bar, Color("1b1535"), OUT, 7, 2)
+	Art.rbox(self, bar, Color("17141b"), OUT, 7, 2)
 	var good := Rect2(bar.position.x + bar.size.x * 0.3, bar.position.y + 2, bar.size.x * 0.4, bar.size.y - 4)
 	Art.rbox(self, good, Color("8a5a20"), Color(0, 0, 0, 0), 5)
 	var perf := Rect2(bar.position.x + bar.size.x * 0.42, bar.position.y + 1, bar.size.x * 0.16, bar.size.y - 2)
@@ -2760,77 +2775,87 @@ func _wrap_text(t: String, pos: Vector2, max_w: float, col: Color) -> float:
 
 func _draw_pause() -> void:
 	var s := _size()
-	draw_rect(Rect2(Vector2.ZERO, s), Color(0.02, 0.01, 0.06, 0.72))
-	PixelFont.draw_centered(self, "Pausa", s.x / 2.0, s.y * 0.28, 4, Color("ffc94a"), OUT)
-	var r1 := Rect2(s.x / 2.0 - 80, s.y * 0.42, 160, 36)
-	var r2 := Rect2(s.x / 2.0 - 80, s.y * 0.42 + 50, 160, 30)
+	draw_rect(Rect2(Vector2.ZERO, s), Color(0.02, 0.015, 0.02, 0.8))
+	var pr := Rect2(18, s.y * 0.16, s.x - 36, 328)
+	Art.plate(self, pr, Color("221e27"), Color("0f0d12"), Art.PANEL_EDGE, 10.0, true)
+	PixelFont.draw_custom(self, "cinzel", "PAUSA", s.x / 2.0, pr.position.y + 14, 30, Art.GOLD, Art.INK, 4)
+	draw_line(Vector2(pr.position.x + 30, pr.position.y + 54), Vector2(pr.end.x - 30, pr.position.y + 54), Color(Art.GOLD, 0.35), 1.0)
+	var y := pr.position.y + 64
+	PixelFont.draw_centered(self, "Capitolo 1 · stanza %d di %d" % [room_n, Data.ROOMS], s.x / 2.0, y, 1, Art.TEXT)
+	_draw_map(Vector2(pr.position.x + 18, y + 26), pr.size.x - 36)
+	y += 50
+	Art.header(self, "Abilità · livello %d" % lvl, s.x / 2.0, y, pr.size.x - 40)
+	if skills.is_empty():
+		PixelFont.draw_centered(self, "Nessuna: sali di livello sconfiggendo nemici", s.x / 2.0, y + 22, 1, Art.TEXT_DIM)
+	else:
+		_draw_skill_row(y + 30)
+	y += 58
+	var r1 := Rect2(s.x / 2.0 - 84, y, 168, 40)
+	var r2 := Rect2(s.x / 2.0 - 84, y + 50, 168, 30)
+	var sr := Rect2(s.x / 2.0 - 84, y + 88, 168, 26)
 	ui_rects["resume"] = r1
 	ui_rects["quit"] = r2
-	Art.button(self, r1, "Riprendi", Color("ff8a1a"), true, 2)
-	Art.button(self, r2, "Abbandona", Color("5b5577"), true, 1)
-	PixelFont.draw_centered(self, "Abbandonando tieni una parte del bottino", s.x / 2.0, r2.end.y + 12, 1, Art.TEXT_DIM)
-	PixelFont.draw_centered(self, "Livello %d · abilità prese" % lvl, s.x / 2.0, r2.end.y + 44, 1, Color.WHITE)
-	if skills.is_empty():
-		PixelFont.draw_centered(self, "Nessuna: sali di livello sconfiggendo nemici", s.x / 2.0, r2.end.y + 62, 1, Art.TEXT_DIM)
-	else:
-		_draw_skill_row(r2.end.y + 70)
-	PixelFont.draw_centered(self, "Capitolo 1 · stanza %d di %d" % [room_n, Data.ROOMS], s.x / 2.0, r2.end.y + 96, 1, Color.WHITE)
-	_draw_map(Vector2(24, r2.end.y + 124), s.x - 48)
-	var sr := Rect2(s.x / 2.0 - 60, r2.end.y + 146, 120, 26)
 	ui_rects["sound"] = sr
-	Art.button(self, sr, "Suoni: sì" if Save.sound else "Suoni: no", Color("3fae6a") if Save.sound else Color("5b5577"), true, 1)
+	Art.button(self, r1, "Riprendi", Art.MOLTEN, true, 2)
+	Art.button(self, r2, "Abbandona", Art.STEEL, true, 1)
+	Art.button(self, sr, "Suoni: sì" if Save.sound else "Suoni: no", Color("3d8a5a") if Save.sound else Art.IRON_L, true, 1)
+	PixelFont.draw_centered(self, "Abbandonando tieni una parte del bottino", s.x / 2.0, sr.end.y + 10, 1, Art.TEXT_DIM)
 
 func _draw_end() -> void:
 	if end_t < 0.8:
 		return
 	var s := _size()
 	var a := clampf((end_t - 0.8) * 3.0, 0.0, 1.0)
-	draw_rect(Rect2(Vector2.ZERO, s), Color(0.02, 0.01, 0.06, 0.78 * a))
+	draw_rect(Rect2(Vector2.ZERO, s), Color(0.02, 0.015, 0.02, 0.85 * a))
 	var win := state == St.WIN
-	var y := s.y * 0.12
-	PixelFont.draw_centered(self, "Vittoria!" if win else "Sei caduta", s.x / 2.0, y, 4, Color("ffc94a") if win else Color("ff5a6a"), OUT)
-	var sub := ("La Fonderia caduta · capitolo completato · livello %d" % lvl) if win else "Arrivata alla stanza %d di %d · livello %d" % [room_n, Data.ROOMS, lvl]
-	PixelFont.draw_centered(self, sub, s.x / 2.0, y + 36, 1, Color("c9b8ff"))
-	var pr := Rect2(18, y + 54, s.x - 36, 150)
-	Art.rbox(self, pr, Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.15), 12, 1)
-	var lx := pr.position.x + 12
-	var ly := pr.position.y + 12
+	var y := s.y * 0.08
+	var tc: Color = Art.GOLD if win else Color("d8343e")
+	Art.glow(self, Vector2(s.x / 2.0, y + 22), 120, Color(tc, 0.25 * a))
+	PixelFont.draw_custom(self, "cinzel", "VITTORIA" if win else "SCONFITTA", s.x / 2.0, y, 34, Color(tc.lightened(0.15), a), Color(Art.INK, a), 5)
+	var sub := ("La Fonderia caduta · capitolo completato · livello %d" % lvl) if win else "Stanza %d di %d · livello %d" % [room_n, Data.ROOMS, lvl]
+	PixelFont.draw_centered(self, sub, s.x / 2.0, y + 44, 1, Color(Art.TEXT_DIM, a))
+	var pr := Rect2(18, y + 62, s.x - 36, 156)
+	Art.plate(self, pr, Color("221e27"), Color("0f0d12"), Art.GOLD if win else Art.PANEL_EDGE, 8.0, true)
+	Art.header(self, "Bottino", s.x / 2.0, pr.position.y + 8, pr.size.x - 40)
+	var lx := pr.position.x + 14
+	var ly := pr.position.y + 28
 	var lines := [
 		["gold", "Oro raccolto", str(end_info.gold), Art.GOLD],
-		["spark", "Scintille non spese: %d" % end_info.sparks, "+%d oro" % end_info.spark_gold, Color("ffb03a")],
+		["spark", "Scintille non spese: %d" % end_info.sparks, "+%d oro" % end_info.spark_gold, Art.MOLTEN_L],
 		["gem", "Gemme raccolte", str(end_info.gems), Art.GEM],
 	]
 	for l in lines:
 		Art.icon(self, l[0], Vector2(lx, ly), 1.5, l[3])
-		PixelFont.draw_text(self, l[1], Vector2(lx + 16, ly), 1, Color.WHITE)
+		PixelFont.draw_text(self, l[1], Vector2(lx + 16, ly), 1, Art.TEXT)
 		var vw := PixelFont.text_width(l[2], 1)
-		PixelFont.draw_text(self, l[2], Vector2(pr.end.x - 12 - vw, ly), 1, l[3])
+		PixelFont.draw_text(self, l[2], Vector2(pr.end.x - 14 - vw, ly), 1, l[3])
 		ly += 16
 	var mx := lx
 	for m in ["bone", "stone", "ember"]:
 		var md: Dictionary = Gear.MATERIALS[m]
 		Art.icon(self, md.icon, Vector2(mx, ly), 1.5, md.color)
-		PixelFont.draw_text(self, "+%d %s" % [end_info.mats.get(m, 0), PixelFont.nice(md.name)], Vector2(mx + 15, ly), 1, Color.WHITE)
+		PixelFont.draw_text(self, "+%d %s" % [end_info.mats.get(m, 0), PixelFont.nice(md.name)], Vector2(mx + 15, ly), 1, Art.TEXT)
 		mx += 74
 	ly += 18
+	draw_line(Vector2(pr.position.x + 20, ly - 3), Vector2(pr.end.x - 20, ly - 3), Color(Art.STEEL, 0.4), 1.0)
 	var pct := "Tieni il %d%% del bottino" % int(round(end_info.frac * 100))
-	PixelFont.draw_centered(self, pct, s.x / 2.0, ly, 1, Art.TEXT_DIM if not win else Art.GREEN)
+	PixelFont.draw_centered(self, pct, s.x / 2.0, ly + 2, 1, Art.TEXT_DIM if not win else Art.GREEN)
 	ly += 16
 	var tot := "+%d oro   +%d gemme" % [end_info.gold_kept, end_info.gems_kept]
-	PixelFont.draw_centered(self, tot, s.x / 2.0, ly, 3, Color("ffc94a"), OUT)
-	var by := pr.end.y + 10
+	PixelFont.draw_centered(self, tot, s.x / 2.0, ly, 3, Art.GOLD_L, OUT)
+	var by := pr.end.y + 12
 	if not run_items.is_empty():
-		PixelFont.draw_centered(self, "Bottino dei boss:", s.x / 2.0, by, 1, Color("ffb03a"))
+		PixelFont.draw_centered(self, "Bottino dei boss", s.x / 2.0, by, 1, Art.MOLTEN_L)
 		var bx := s.x / 2.0 - (run_items.size() * 38 - 4) / 2.0
 		for i in run_items.size():
 			Art.item_box(self, run_items[i], Rect2(bx + i * 38, by + 14, 34, 34))
 		by += 56
-	var r1 := Rect2(s.x / 2.0 - 90, by + 6, 180, 38)
-	var r2 := Rect2(s.x / 2.0 - 70, by + 54, 140, 28)
+	var r1 := Rect2(s.x / 2.0 - 92, by + 6, 184, 42)
+	var r2 := Rect2(s.x / 2.0 - 72, by + 58, 144, 30)
 	ui_rects["again"] = r1
 	ui_rects["home"] = r2
-	Art.button(self, r1, "Rigioca", Color("ff8a1a"), true, 2)
-	Art.button(self, r2, "Campo base", Color("5b5577"), true, 1)
+	Art.button(self, r1, "Rigioca", Art.MOLTEN, true, 2)
+	Art.button(self, r2, "Campo base", Art.STEEL, true, 1)
 
 var _dbg_t := 0.0
 func _autotest_step() -> void:

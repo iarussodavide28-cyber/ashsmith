@@ -22,6 +22,29 @@ func _ready() -> void:
 	music.volume_db = -13.0
 	add_child(music)
 	_build_sfx()
+	# solo per le prove: --shot=file.png --frames=N --scene=res://...
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("shot="):
+			_shot = a.substr(5)
+		elif a.begins_with("frames="):
+			_shot_frames = int(a.substr(7))
+		elif a.begins_with("scene="):
+			_goto = a.substr(6)
+	if _goto != "":
+		get_tree().change_scene_to_file.call_deferred(_goto)
+
+var _shot := ""
+var _shot_frames := 120
+var _goto := ""
+var _frame := 0
+
+func _process(_d: float) -> void:
+	if _shot == "":
+		return
+	_frame += 1
+	if _frame == _shot_frames:
+		get_viewport().get_texture().get_image().save_png(_shot)
+		get_tree().quit()
 
 func enabled() -> bool:
 	return Save.sound
@@ -114,88 +137,114 @@ func _reg(name: String, b: PackedFloat32Array, vol_db: float = 0.0) -> void:
 	streams[name] = _wav(b)
 	vols[name] = vol_db
 
+## Suono di metallo: parziali non armoniche (come un'incudine o una lama)
+func _ring(buf: PackedFloat32Array, start: int, dur: float, base: float, vol: float, curve: float = 3.0) -> void:
+	var ratios := [1.0, 2.76, 5.40, 8.93]
+	var amps := [1.0, 0.55, 0.3, 0.15]
+	for i in ratios.size():
+		var f: float = base * ratios[i]
+		if f > RATE * 0.45:
+			continue
+		_add(buf, start, dur * (1.0 - i * 0.18), f, f * 0.998, "sine", vol * amps[i], 0.0008, curve + i)
+
+## Filtro passa-basso: rende il suono più scuro
+func _lowpass(buf: PackedFloat32Array, k: float) -> void:
+	var y := 0.0
+	for i in buf.size():
+		y += (buf[i] - y) * k
+		buf[i] = y
+
 func _build_sfx() -> void:
 	var b: PackedFloat32Array
-	b = _buf(0.12); _add(b, 0, 0.1, 5000, 1500, "noise", 0.5, 0.002, 3.0); _add(b, 0, 0.06, 1400, 700, "tri", 0.25)
+	# armi
+	b = _buf(0.14); _add(b, 0, 0.11, 4200, 900, "noise", 0.55, 0.002, 3.0); _add(b, 0, 0.05, 520, 260, "tri", 0.3)
 	_reg("bow", b, -10.0)
-	b = _buf(0.16); _add(b, 0, 0.15, 1200, 4000, "noise", 0.7, 0.04, 2.0)
+	b = _buf(0.2); _add(b, 0, 0.16, 900, 3800, "noise", 0.7, 0.03, 2.0); _ring(b, int(0.02 * RATE), 0.16, 1900, 0.08, 4.0)
 	_reg("sword", b, -9.0)
-	b = _buf(0.22); _add(b, 0, 0.2, 420, 140, "sine", 0.6, 0.004, 2.0); _add(b, 0, 0.12, 900, 300, "tri", 0.2)
-	_reg("staff", b, -9.0)
-	b = _buf(0.09); _add(b, 0, 0.08, 220, 70, "sine", 0.8, 0.001, 2.5); _add(b, 0, 0.04, 3000, 800, "noise", 0.35, 0.001, 3.0)
+	b = _buf(0.3); _add(b, 0, 0.26, 260, 70, "sine", 0.7, 0.004, 2.0); _add(b, 0, 0.18, 1200, 200, "noise", 0.3, 0.01, 2.0)
+	_reg("staff", b, -8.0)
+	# colpi
+	b = _buf(0.1); _add(b, 0, 0.08, 160, 55, "sine", 0.9, 0.001, 2.5); _add(b, 0, 0.05, 2200, 600, "noise", 0.4, 0.001, 3.0)
 	_reg("hit", b, -8.0)
-	b = _buf(0.14); _add(b, 0, 0.1, 1500, 900, "square", 0.22, 0.001, 2.0); _add(b, 0, 0.09, 260, 60, "sine", 0.8, 0.001, 2.0)
+	b = _buf(0.3); _add(b, 0, 0.1, 180, 50, "sine", 0.9, 0.001, 2.0); _ring(b, 0, 0.28, 1150, 0.22, 3.0); _add(b, 0, 0.03, 6000, 2500, "noise", 0.5, 0.0005, 2.0)
 	_reg("crit", b, -7.0)
-	b = _buf(0.3); _add(b, 0, 0.26, 2500, 300, "noise", 0.7, 0.002, 2.0); _add(b, 0, 0.22, 240, 45, "sine", 0.7, 0.002, 2.0)
-	_reg("kill", b, -7.0)
-	b = _buf(0.14); _add(b, 0, 0.06, 1320, 1320, "sine", 0.45, 0.002, 1.5); _add(b, int(0.05 * RATE), 0.09, 1980, 1980, "sine", 0.45, 0.002, 2.0)
-	_reg("coin", b, -14.0)
-	b = _buf(0.07); _add(b, 0, 0.06, 1700, 2600, "sine", 0.4, 0.002, 2.0)
+	b = _buf(0.36); _add(b, 0, 0.3, 1800, 160, "noise", 0.75, 0.002, 2.0); _add(b, 0, 0.26, 150, 38, "sine", 0.85, 0.002, 2.0)
+	_reg("kill", b, -6.0)
+	# monete e scintille: piccoli rintocchi metallici
+	b = _buf(0.3); _ring(b, 0, 0.14, 2100, 0.3, 4.0); _ring(b, int(0.055 * RATE), 0.22, 2650, 0.3, 4.0)
+	_reg("coin", b, -15.0)
+	b = _buf(0.1); _add(b, 0, 0.08, 1500, 2400, "tri", 0.3, 0.002, 2.0); _add(b, 0, 0.05, 7000, 4000, "noise", 0.15, 0.001, 3.0)
 	_reg("spark", b, -16.0)
-	b = _buf(0.7)
-	var notes := [523.25, 659.25, 783.99, 1046.5]
+	# livello: accordo minore di ottoni + rintocco
+	b = _buf(1.1)
+	var notes := [220.0, 261.63, 329.63, 440.0]
 	for i in notes.size():
-		_add(b, int(i * 0.08 * RATE), 0.4, notes[i], notes[i], "square", 0.16, 0.003, 2.0)
-		_add(b, int(i * 0.08 * RATE), 0.45, notes[i] * 2.0, notes[i] * 2.0, "sine", 0.12, 0.003, 2.5)
-	_reg("level", b, -6.0)
-	b = _buf(0.28); _add(b, 0, 0.25, 180, 70, "saw", 0.45, 0.002, 1.5); _add(b, 0, 0.12, 2000, 400, "noise", 0.4, 0.001, 2.0)
-	_reg("hurt", b, -6.0)
-	b = _buf(0.9)
-	for f in [523.0, 1307.0, 2093.0, 2950.0, 3700.0]:
-		_add(b, 0, 0.85, f, f * 0.995, "sine", 0.18, 0.001, 3.5)
-	_add(b, 0, 0.03, 6000, 2000, "noise", 0.5, 0.0005, 2.0)
-	_reg("clang", b, -8.0)
-	b = _buf(0.7); _add(b, 0, 0.65, 400, 90, "noise", 0.6, 0.05, 1.5); _add(b, 0, 0.6, 80, 50, "sine", 0.6, 0.05, 1.5)
-	_reg("door", b, -6.0)
-	b = _buf(0.16); _add(b, 0, 0.12, 800, 5000, "noise", 0.5, 0.01, 2.0); _add(b, int(0.1 * RATE), 0.04, 1800, 1800, "square", 0.15, 0.001, 2.0)
+		_add(b, int(i * 0.07 * RATE), 0.8, notes[i], notes[i], "saw", 0.09, 0.03, 1.6)
+		_add(b, int(i * 0.07 * RATE), 0.8, notes[i] * 0.5, notes[i] * 0.5, "tri", 0.14, 0.03, 1.6)
+	_ring(b, int(0.28 * RATE), 0.8, 880, 0.18, 3.0)
+	_lowpass(b, 0.35)
+	_reg("level", b, -4.0)
+	b = _buf(0.3); _add(b, 0, 0.26, 130, 50, "saw", 0.45, 0.002, 1.5); _add(b, 0, 0.12, 1600, 300, "noise", 0.4, 0.001, 2.0)
+	_lowpass(b, 0.5)
+	_reg("hurt", b, -5.0)
+	# incudine
+	b = _buf(1.1)
+	_ring(b, 0, 1.0, 640, 0.32, 3.5)
+	_ring(b, 0, 0.6, 1370, 0.12, 4.0)
+	_add(b, 0, 0.03, 6000, 2000, "noise", 0.55, 0.0005, 2.0)
+	_add(b, 0, 0.12, 120, 50, "sine", 0.5, 0.001, 2.0)
+	_reg("clang", b, -7.0)
+	b = _buf(0.9); _add(b, 0, 0.8, 300, 60, "noise", 0.6, 0.06, 1.5); _add(b, 0, 0.75, 60, 38, "sine", 0.7, 0.05, 1.5); _ring(b, int(0.62 * RATE), 0.25, 300, 0.15, 3.0)
+	_reg("door", b, -5.0)
+	b = _buf(0.18); _add(b, 0, 0.1, 600, 3000, "noise", 0.4, 0.01, 2.0); _ring(b, int(0.08 * RATE), 0.1, 1500, 0.15, 4.0)
 	_reg("switch", b, -9.0)
-	b = _buf(0.05); _add(b, 0, 0.04, 1100, 900, "sine", 0.5, 0.001, 2.0)
-	_reg("click", b, -10.0)
-	b = _buf(1.3); _add(b, 0, 1.2, 98, 92, "saw", 0.35, 0.08, 1.2); _add(b, 0, 1.2, 147, 138, "saw", 0.25, 0.08, 1.2); _add(b, 0, 1.0, 300, 80, "noise", 0.3, 0.1, 1.5)
-	_reg("boss", b, -5.0)
-	b = _buf(0.9)
-	var up := [392.0, 523.25, 659.25, 783.99]
+	# clic dell'interfaccia: tacca metallica breve
+	b = _buf(0.08); _ring(b, 0, 0.06, 1650, 0.25, 5.0); _add(b, 0, 0.012, 5000, 3000, "noise", 0.3, 0.0005, 2.0)
+	_reg("click", b, -11.0)
+	b = _buf(1.6); _add(b, 0, 1.5, 55, 49, "saw", 0.4, 0.1, 1.2); _add(b, 0, 1.5, 82.4, 73.4, "saw", 0.28, 0.1, 1.2); _add(b, 0, 1.2, 240, 60, "noise", 0.35, 0.15, 1.5); _ring(b, 0, 1.4, 220, 0.2, 2.5)
+	_lowpass(b, 0.25)
+	_reg("boss", b, -3.0)
+	b = _buf(1.2)
+	var up := [293.66, 349.23, 440.0, 587.33]
 	for i in up.size():
-		_add(b, int(i * 0.06 * RATE), 0.6, up[i], up[i], "tri", 0.25, 0.003, 2.0)
+		_ring(b, int(i * 0.09 * RATE), 0.7, up[i], 0.16, 3.0)
+		_add(b, int(i * 0.09 * RATE), 0.6, up[i] * 0.5, up[i] * 0.5, "tri", 0.14, 0.004, 2.0)
 	_reg("clear", b, -6.0)
-	b = _buf(0.4); _add(b, 0, 0.35, 700, 300, "noise", 0.5, 0.004, 2.0); _add(b, 0, 0.3, 150, 60, "sine", 0.6, 0.002, 2.0)
-	_reg("slam", b, -5.0)
-	b = _buf(0.12); _add(b, 0, 0.1, 700, 300, "square", 0.18, 0.002, 2.0)
-	_reg("shoot_enemy", b, -16.0)
+	b = _buf(0.45); _add(b, 0, 0.4, 500, 150, "noise", 0.55, 0.004, 2.0); _add(b, 0, 0.34, 110, 40, "sine", 0.8, 0.002, 2.0)
+	_reg("slam", b, -4.0)
+	b = _buf(0.14); _add(b, 0, 0.12, 500, 200, "saw", 0.2, 0.002, 2.0)
+	_lowpass(b, 0.4)
+	_reg("shoot_enemy", b, -14.0)
 
-## Musica: 4 battute in La minore, con un colpo d'incudine a fine battuta.
+## Musica: 4 battute in Re minore, lenta e cupa: bordone, tamburi e incudine.
 func _build_music() -> AudioStreamWAV:
-	var bpm := 112.0
+	var bpm := 90.0
 	var beat := 60.0 / bpm
 	var bars := 4
 	var b := _buf(beat * 4 * bars)
-	var roots := [110.0, 87.31, 98.0, 82.41]          # La, Fa, Sol, Mi
-	var arp := [[220.0, 261.63, 329.63], [174.61, 220.0, 261.63], [196.0, 246.94, 293.66], [164.81, 207.65, 246.94]]
+	var roots := [73.42, 58.27, 65.41, 55.0]          # Re, Sib, Do, La
+	var mel := [[293.66, 349.23, 440.0, 349.23], [233.08, 293.66, 349.23, 293.66], [261.63, 329.63, 392.0, 329.63], [220.0, 277.18, 329.63, 440.0]]
 	for bar in bars:
 		var t0 := bar * 4 * beat
-		for q in 8:
-			var t := t0 + q * beat * 0.5
-			var i := int(t * RATE)
-			# basso a ottavi
-			_add(b, i, beat * 0.45, roots[bar], roots[bar], "tri", 0.32, 0.004, 1.2)
-			# charleston sui controtempi
-			if q % 2 == 1:
-				_add(b, i, 0.05, 8000, 6000, "noise", 0.12, 0.001, 3.0)
+		var i0 := int(t0 * RATE)
+		# bordone (due saw basse leggermente stonate)
+		_add(b, i0, beat * 4.1, roots[bar], roots[bar], "saw", 0.14, 0.25, 0.6)
+		_add(b, i0, beat * 4.1, roots[bar] * 1.003, roots[bar] * 1.003, "saw", 0.12, 0.25, 0.6)
+		_add(b, i0, beat * 4.1, roots[bar] * 0.5, roots[bar] * 0.5, "sine", 0.3, 0.2, 0.8)
 		for q in 4:
 			var i := int((t0 + q * beat) * RATE)
-			# cassa
-			_add(b, i, 0.18, 120, 45, "sine", 0.55, 0.001, 2.5)
+			# tamburo grave
+			_add(b, i, 0.35, 95, 42, "sine", 0.6 if q % 2 == 0 else 0.4, 0.002, 2.2)
 			if q == 1 or q == 3:
-				_add(b, i, 0.12, 2500, 900, "noise", 0.2, 0.001, 2.5)
-		# arpeggio leggero a sedicesimi
-		for s in 16:
-			var i := int((t0 + s * beat * 0.25) * RATE)
-			var f: float = arp[bar][s % 3] * (2.0 if s % 8 >= 4 else 1.0)
-			_add(b, i, beat * 0.22, f, f, "square", 0.045, 0.002, 2.0)
-		# incudine
-		var ia := int((t0 + 3.5 * beat) * RATE)
-		for f in [1046.0, 2614.0, 4186.0]:
-			_add(b, ia, 0.35, f, f, "sine", 0.06, 0.001, 3.0)
+				_add(b, i, 0.18, 1800, 500, "noise", 0.18, 0.002, 2.5)
+			# arpeggio lento pizzicato
+			var f: float = mel[bar][q]
+			_add(b, i, beat * 0.9, f, f, "tri", 0.07, 0.004, 2.5)
+		# tom in levare
+		_add(b, int((t0 + 3.5 * beat) * RATE), 0.22, 140, 70, "sine", 0.35, 0.002, 2.0)
+		# incudine sul quarto tempo
+		_ring(b, int((t0 + 3.0 * beat) * RATE), 0.9, 523.0 if bar % 2 == 0 else 466.0, 0.07, 3.5)
+	_lowpass(b, 0.3)
 	# normalizza
 	var peak := 0.01
 	for x in b:
