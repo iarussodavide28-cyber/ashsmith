@@ -1,7 +1,7 @@
 extends Node2D
 ## Schermata iniziale: nome del gioco, incudine con braci. Tocca per entrare.
 
-const VERSION_TEXT := "v0.7"
+const VERSION_TEXT := "v1.0"
 
 var embers: Array = []
 var sparks: Array = []
@@ -35,6 +35,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch and event.pressed and not starting:
 		starting = true
 		strike = 1.0
+		Sfx.play("clang", 0.0)
+		Sfx.music_on()
 		var c := _anvil_pos()
 		for i in 30:
 			var a := randf_range(PI * 1.05, PI * 1.95)

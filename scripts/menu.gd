@@ -26,6 +26,7 @@ var dragging := false
 var touching := false
 
 func _ready() -> void:
+	Sfx.music_on()
 	if Save.has_meta("menu_tab"):
 		tab = Save.get_meta("menu_tab")
 
@@ -71,6 +72,7 @@ func _overlay_open() -> bool:
 	return detail_id != -1 or show_recipes or not reveal.is_empty()
 
 func _tap(p: Vector2) -> void:
+	Sfx.play("click", 0.0)
 	# il primo rettangolo trovato in ordine inverso (gli ultimi disegnati stanno sopra)
 	var keys := rects.keys()
 	keys.reverse()

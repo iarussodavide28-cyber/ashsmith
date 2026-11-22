@@ -28,6 +28,8 @@ const ACCEL := 900.0
 const FRICTION := 1100.0
 const JOY_RADIUS := 28.0
 const BASE_HP := 120
+const ZOOM := 1.3            # camera più vicina: personaggi più grandi
+const ROOM_H := 370.0        # stanze più alte dello schermo: la camera segue l'eroe
 
 # ---------- Stato ----------
 var state := St.PLAY
@@ -113,6 +115,16 @@ var hurt_t := 0.0
 var spirit_t := 0.0
 var orb_ang := 0.0
 var last_dir := Vector2.UP
+var cam_y := 0.0
+var corpses: Array = []       # nemici che si sbriciolano in cenere
+var slowmo := 0.0
+var intro_t := 0.0            # cartolina del capitolo a inizio partita
+var altar := {}               # Altare delle braci (alcune stanze)
+var level_mode := "level"
+var recoil := 0.0
+var dark_tex: GradientTexture2D
+var boss_card_t := 0.0
+var strike := {}              # colpo di martello alla forgia (tempismo)
 var switch_bonus := false   # il primo attacco dopo il cambio arma è un critico potenziato
 
 var autotest := false        # prova automatica (solo per i test, non nel gioco)
@@ -129,8 +141,22 @@ func _ready() -> void:
 	hero_hp = max_hp
 	for k in Save.run_weapons():
 		weapons.append({"key": k, "slots": ["", ""], "paid": [0, 0]})
+	var g := Gradient.new()
+	g.set_color(0, Color(0, 0, 0, 0))
+	g.set_color(1, Color(0.02, 0.0, 0.05, 0.68))
+	g.add_point(0.42, Color(0, 0, 0, 0))
+	dark_tex = GradientTexture2D.new()
+	dark_tex.gradient = g
+	dark_tex.width = 128
+	dark_tex.height = 128
+	dark_tex.fill = GradientTexture2D.FILL_RADIAL
+	dark_tex.fill_from = Vector2(0.5, 0.5)
+	dark_tex.fill_to = Vector2(1.0, 0.5)
+	intro_t = 2.8
 	_start_room()
+	wave_delay = 2.4
 	_debug_params()
+	Sfx.music_on()
 
 ## Solo per le prove: ?room=7&sparks=200 nell'indirizzo salta a una stanza
 func _debug_params() -> void:
@@ -167,9 +193,30 @@ func _debug_params() -> void:
 func _size() -> Vector2:
 	return get_viewport_rect().size
 
+func _view_w() -> float:
+	return _size().x / ZOOM
+
+func _view_h() -> float:
+	return (_size().y - HUD_H - BAR_H) / ZOOM
+
+## La stanza è in coordinate del mondo (non dello schermo)
 func _room_rect() -> Rect2:
-	var s := _size()
-	return Rect2(WALL_SIZE, HUD_H + TOP_WALL, s.x - WALL_SIZE * 2, s.y - HUD_H - BAR_H - TOP_WALL - WALL_SIZE)
+	return Rect2(WALL_SIZE, TOP_WALL, _view_w() - WALL_SIZE * 2, ROOM_H)
+
+func _cam_target() -> float:
+	var total := TOP_WALL + ROOM_H + WALL_SIZE
+	return clampf(hero_pos.y - _view_h() * 0.6, 0.0, maxf(0.0, total - _view_h()))
+
+func _w2s(p: Vector2) -> Vector2:
+	return Vector2(p.x * ZOOM, (p.y - cam_y) * ZOOM + HUD_H)
+
+var _base_off := Vector2.ZERO
+## Trasformazioni di disegno dentro il mondo
+func _xf(pos: Vector2, rot: float = 0.0, sc: Vector2 = Vector2.ONE) -> void:
+	draw_set_transform(_base_off + pos * ZOOM, rot, sc * ZOOM)
+
+func _xr() -> void:
+	draw_set_transform(_base_off, 0, Vector2(ZOOM, ZOOM))
 
 func _switch_rect() -> Rect2:
 	var s := _size()
@@ -197,6 +244,9 @@ func _start_room() -> void:
 	var r := _room_rect()
 	hero_pos = Vector2(r.get_center().x, r.end.y - 30)
 	hero_vel = Vector2.ZERO
+	cam_y = _cam_target()
+	corpses.clear()
+	altar = {}
 	enemies.clear(); shots.clear(); bullets.clear(); drops.clear()
 	clouds.clear(); patches.clear(); bolts.clear()
 	anvil = {}
@@ -208,10 +258,14 @@ func _start_room() -> void:
 	state = St.PLAY
 	if room_n == Data.MINIBOSS_ROOM:
 		waves = [["miniboss", "pebble", "pebble"]]
-		_banner("MINI-BOSS: GOLEM ANTICO")
+		boss_card_t = 2.4
+		wave_delay = 2.0
+		Sfx.play("boss", 0.0)
 	elif room_n == Data.BOSS_ROOM:
 		waves = [["boss"]]
-		_banner("BOSS: SIGNORE DELLA CENERE")
+		boss_card_t = 2.4
+		wave_delay = 2.0
+		Sfx.play("boss", 0.0)
 	else:
 		waves = Data.WAVES.get(room_n, [["zombie", "imp"]]).duplicate(true)
 		_banner("STANZA %d" % room_n)
@@ -283,7 +337,7 @@ func _free_spot() -> Vector2:
 	var r := _room_rect()
 	for i in 60:
 		var p := Vector2(randf_range(r.position.x + 20, r.end.x - 20), randf_range(r.position.y + 20, r.position.y + r.size.y * 0.62))
-		if p.distance_to(hero_pos) > 90 and not _in_rock(p) and _push_out(p, 14) == p:
+		if p.distance_to(hero_pos) > 110 and not _in_rock(p) and _push_out(p, 14) == p:
 			return p
 	return Vector2(r.get_center().x, r.position.y + 40)
 
@@ -304,7 +358,14 @@ func _spawn_enemy(k: String, p: Vector2) -> Dictionary:
 	else:
 		var d: Dictionary = Data.ENEMIES[k]
 		e.merge(d.duplicate(), true)
-		e.hp = d.hp * (1.0 + 0.13 * (room_n - 1))
+		e.hp = d.hp * (1.0 + 0.15 * (room_n - 1))
+		# nemici élite: più grandi, più forti, più bottino
+		if room_n >= 3 and randf() < 0.06 + 0.015 * room_n:
+			e.elite = true
+			e.hp *= 2.4
+			e.size = int(e.size * 1.25)
+			e.speed *= 1.1
+			e.dmg = int(e.dmg * 1.3)
 		e.dmg = int(round(d.dmg * (1.25 + 0.03 * (room_n - 1))))
 	e.max = e.hp
 	enemies.append(e)
@@ -358,6 +419,7 @@ func _try_switch() -> void:
 	switch_t = Data.SWITCH_COOLDOWN
 	atk_t = minf(atk_t, 0.15)
 	switch_bonus = true
+	Sfx.play("switch", 0.03)
 	rings.append({"pos": hero_pos, "r0": 8.0, "r1": 30.0, "life": 0.3, "max": 0.3, "col": Color("b9a8ff")})
 	_float(hero_pos + Vector2(0, -16), _wdata().name, Color.WHITE)
 
@@ -380,8 +442,20 @@ func _process(delta: float) -> void:
 		return
 	if state == St.LEVEL:
 		lvl_t += dt
+	if state == St.FORGE and not strike.is_empty():
+		strike.t += dt
+		if strike.t > 2.6:
+			_resolve_strike()
+	cam_y = lerpf(cam_y, _cam_target(), minf(1.0, dt * 7.0))
+	intro_t = maxf(0.0, intro_t - dt)
+	boss_card_t = maxf(0.0, boss_card_t - dt)
+	recoil = maxf(0.0, recoil - dt * 8.0)
+	var gdt := dt
+	if slowmo > 0.0:
+		slowmo -= dt
+		gdt = dt * 0.3
 	if state == St.PLAY or state == St.CLEAR:
-		_update_play(dt)
+		_update_play(gdt)
 	elif state == St.DEAD or state == St.WIN:
 		end_t += dt
 		_update_fx(dt)
@@ -446,6 +520,16 @@ func _update_hero(dt: float) -> void:
 			anvil_lock = false
 		if not anvil_lock and d < 16:
 			_open_forge()
+	if not altar.is_empty() and not altar.used and hero_pos.distance_to(altar.pos) < 15:
+		altar.used = true
+		level_choices = ["altar_heal", "altar_skill"]
+		level_mode = "altar"
+		level_ret = state
+		state = St.LEVEL
+		lvl_t = 0.0
+		touch_index = -1
+		hero_vel = Vector2.ZERO
+		Sfx.play("clang", 0.0)
 
 func _alive_enemies() -> Array:
 	return enemies.filter(func(e): return e.spawn <= 0.0 and e.dead_t <= 0.0)
@@ -547,6 +631,8 @@ func _fire_volley(dir: Vector2, mult: float, sure_crit: bool = false) -> void:
 			"area": wd.area, "hit": [], "col": col, "pierce": _sk("pierce") > 0, "bounce": 1 if _sk("bounce") > 0 else 0,
 			"chain": _sk("chain"), "kb": {"sword": 150.0, "bow": 70.0, "staff": 55.0}.get(w.key, 60.0),
 		})
+	recoil = 1.0
+	Sfx.play({"sword": "sword", "bow": "bow", "staff": "staff"}.get(w.key, "bow"))
 	# lampo sulla punta dell'arma
 	for i in 4:
 		parts.append({"pos": hero_pos + dir * 11, "vel": dir.rotated(randf_range(-0.8, 0.8)) * randf_range(40, 90), "life": 0.15, "max": 0.15, "col": col.lightened(0.4), "size": 1})
@@ -786,6 +872,7 @@ func _damage(e: Dictionary, amount: float, col: Color, slots: Array = [], crit: 
 	e.flash = 1.0
 	if amount >= 1.0:
 		_float(e.pos + Vector2(randf_range(-4, 4), -e.size / 2.0 - 4), str(int(round(amount))) + ("!" if crit else ""), col, crit)
+		Sfx.play("crit" if crit else "hit", 0.12)
 	if e.hp <= 0.0:
 		_kill(e, slots)
 
@@ -801,6 +888,10 @@ func _kill(e: Dictionary, slots: Array = []) -> void:
 	if _combo(slots) == "ice+thunder" and (e.slow > 0.0 or e.freeze > 0.0):
 		_explode(e.pos, 26.0, 18.0, [], Color("bfefff"))
 	e.dead = true
+	Sfx.play("kill", 0.12, 3.0 if e.boss else 0.0)
+	corpses.append({"pos": e.pos, "col": _enemy_color(e), "size": float(e.size), "t": 0.0, "k": e.k})
+	for i in 8:
+		parts.append({"pos": e.pos + Vector2(randf_range(-6, 6), randf_range(-6, 4)), "vel": Vector2(randf_range(-12, 12), randf_range(-45, -20)), "life": 0.9, "max": 0.9, "col": Color("8a8090"), "size": 2})
 	shake = maxf(shake, 0.6 if not e.boss else 1.8)
 	hitstop = maxf(hitstop, 0.04 if not e.boss else 0.2)
 	_burst(e.pos, _enemy_color(e), 12 if not e.boss else 40)
@@ -814,11 +905,17 @@ func _kill(e: Dictionary, slots: Array = []) -> void:
 		gx = 0
 	elif e.size >= 26:
 		gx = 4
+	if e.get("elite", false):
+		gx *= 3
+		for i in 2:
+			_drop("gem", e.pos)
 	_gain_xp(gx, e.pos)
 	if _sk("drain") > 0:
 		hero_hp = mini(max_hp, hero_hp + 3 * _sk("drain"))
 	# bottino
 	var n: int = e.sparks + (1 if bonus.extra_spark else 0)
+	if e.get("elite", false):
+		n *= 2
 	for i in _sk("spark"):
 		if randf() < 0.5:
 			n += 1
@@ -851,7 +948,7 @@ func _kill(e: Dictionary, slots: Array = []) -> void:
 
 func _drop(kind: String, p: Vector2) -> void:
 	var a := randf() * TAU
-	drops.append({"kind": kind, "pos": p, "vel": Vector2(cos(a), sin(a)) * randf_range(30, 90), "t": 0.0})
+	drops.append({"kind": kind, "pos": p, "vel": Vector2(cos(a), sin(a)) * randf_range(30, 90), "t": 0.0, "z": 0.0, "vz": randf_range(70, 110)})
 
 # ---------------------------------------------------------------------
 #  Nemici
@@ -1003,7 +1100,9 @@ func _ai_slammer(e: Dictionary, dt: float, dir: Vector2, dist: float, spd: float
 		e.vel = Vector2.ZERO
 		if e.t <= 0.0:
 			shake = maxf(shake, 1.0)
+			Sfx.play("slam", 0.05)
 			_burst(e.pos, Color("8a7a6a"), 16)
+			rings.append({"pos": e.pos, "r0": 6.0, "r1": slam_r, "life": 0.35, "max": 0.35, "col": Color("d8c0a0")})
 			if hero_pos.distance_to(e.pos) < slam_r:
 				_hurt_hero(e.dmg)
 			e.st = "move"
@@ -1096,6 +1195,7 @@ func _ai_boss(e: Dictionary, dt: float, dir: Vector2, dist: float, spd: float) -
 				e.t = 1.8
 
 func _enemy_shot(p: Vector2, a: float, spd: float, r: float, dmg: int, col: Color) -> void:
+	Sfx.play("shoot_enemy", 0.15)
 	bullets.append({"pos": p, "vel": Vector2.from_angle(a) * spd, "r": r, "dmg": dmg, "col": col})
 
 func _update_bullets(dt: float) -> void:
@@ -1135,6 +1235,7 @@ func _hurt_hero(dmg: int) -> void:
 	hero_inv = 0.8
 	hero_flash = 1.0
 	hurt_t = 1.0
+	Sfx.play("hurt", 0.05)
 	shake = maxf(shake, 1.2)
 	hitstop = maxf(hitstop, 0.05)
 	_float(hero_pos + Vector2(0, -12), "-%d" % dmg, Art.HP)
@@ -1158,6 +1259,11 @@ func _update_drops(dt: float) -> void:
 	var keep: Array = []
 	for d in drops:
 		d.t += dt
+		d.vz -= 420.0 * dt
+		d.z += d.vz * dt
+		if d.z < 0.0:
+			d.z = 0.0
+			d.vz = -d.vz * 0.4 if absf(d.vz) > 25.0 else 0.0
 		var to: Vector2 = hero_pos - d.pos
 		var magnet := state == St.CLEAR or to.length() < 26
 		if magnet and d.t > 0.35:
@@ -1166,6 +1272,7 @@ func _update_drops(dt: float) -> void:
 			d.vel = d.vel.move_toward(Vector2.ZERO, 200 * dt)
 		d.pos += d.vel * dt
 		if to.length() < 8 and d.t > 0.3:
+			Sfx.play("spark" if d.kind == "spark" else "coin", 0.1)
 			match d.kind:
 				"spark": sparks += 1
 				"gold": run_gold += 1
@@ -1190,6 +1297,9 @@ func _update_fx(dt: float) -> void:
 	for r in rings:
 		r.life -= dt
 	rings = rings.filter(func(r): return r.life > 0.0)
+	for c in corpses:
+		c.t += dt
+	corpses = corpses.filter(func(c): return c.t < 0.55)
 	for b in bolts:
 		b.life -= dt
 	bolts = bolts.filter(func(b): return b.life > 0.0)
@@ -1209,6 +1319,8 @@ func _update_room_flow(dt: float) -> void:
 func _room_cleared() -> void:
 	state = St.CLEAR
 	bullets.clear()
+	slowmo = 0.45
+	Sfx.play("clear", 0.0)
 	if room_n == Data.BOSS_ROOM:
 		win_delay = 2.5      # il tempo di raccogliere il bottino del boss
 		_banner("IL SIGNORE DELLA CENERE E SCONFITTO!")
@@ -1217,6 +1329,9 @@ func _room_cleared() -> void:
 	anvil = {"pos": Vector2(r.get_center().x, r.position.y + r.size.y * 0.38), "big": room_n in Data.BIG_FORGE_ROOMS}
 	anvil_lock = false
 	door_open = true
+	Sfx.play("door", 0.0)
+	if room_n in [2, 5, 10]:
+		altar = {"pos": Vector2(r.position.x + 30, r.position.y + r.size.y * 0.55), "used": false}
 	_banner("STANZA LIBERA!" if not anvil.big else "FUCINA GRANDE!")
 	forge_big = anvil.big
 	_make_offers()
@@ -1257,15 +1372,34 @@ func _open_level() -> void:
 		pending_lv = 0
 		return
 	level_ret = state
+	level_mode = "level"
 	state = St.LEVEL
 	lvl_t = 0.0
 	touch_index = -1
 	hero_vel = Vector2.ZERO
+	Sfx.play("level", 0.0)
 
 func _pick_skill(i: int) -> void:
 	if i >= level_choices.size() or lvl_t < 0.35:
 		return
 	var k: String = level_choices[i]
+	Sfx.play("click", 0.0)
+	if level_mode == "altar":
+		state = level_ret
+		level_mode = "level"
+		_burst(hero_pos, Color("ff8a2b"), 24)
+		if k == "altar_heal":
+			hero_hp = mini(max_hp, hero_hp + int(max_hp * 0.6))
+			_float(hero_pos + Vector2(0, -24), "Vita +60%", Art.GREEN)
+		else:
+			var pick: Array = Skills.roll(skills, 0.0)
+			if not pick.is_empty():
+				skills[pick[0]] = _sk(pick[0]) + 1
+				_float(hero_pos + Vector2(0, -24), Skills.LIST[pick[0]].name, Color("ffd36b"))
+				if pick[0] == "hp":
+					max_hp += 25
+					hero_hp += 25
+		return
 	skills[k] = _sk(k) + 1
 	match k:
 		"hp":
@@ -1327,15 +1461,22 @@ func _close_forge() -> void:
 	anvil_lock = true
 
 func _ui_tap(p: Vector2) -> void:
+	if state == St.FORGE and not strike.is_empty():
+		_resolve_strike()
+		return
 	for key in ui_rects:
 		var r: Rect2 = ui_rects[key]
 		if r.has_point(p):
+			if not key.begins_with("skill"):
+				Sfx.play("click", 0.0)
 			_ui_action(key)
 			return
 
 func _ui_action(key: String) -> void:
 	if key.begins_with("skill"):
 		_pick_skill(int(key.substr(5)))
+	elif key == "sound":
+		Sfx.set_enabled(not Save.sound)
 	elif key == "resume":
 		state = St.PLAY if anvil.is_empty() else St.CLEAR
 		if enemies.is_empty() and wave_idx >= waves.size():
@@ -1397,6 +1538,7 @@ func _ui_action(key: String) -> void:
 		var info := Data.slots_info(w.slots, Save.recipes)
 		forge_msg = "%s: %s!" % [Data.WEAPONS[w.key].name, info[0]]
 		_burst(anvil.pos, Data.EL_COLOR[el], 20)
+		strike = {"t": 0.0, "price": price, "el": el}
 
 # =====================================================================
 #  Fine partita
@@ -1433,63 +1575,82 @@ func _draw() -> void:
 	ui_rects.clear()
 	var off := Vector2.ZERO
 	if shake > 0.0:
-		off = Vector2(randf_range(-2, 2), randf_range(-2, 2)) * shake
-	draw_set_transform(off)
+		off = Vector2(randf_range(-2, 2), randf_range(-2, 2)) * shake * 1.3
+	_base_off = Vector2(0, HUD_H - cam_y * ZOOM) + off
+	_xr()
 	_draw_room()
 	_draw_ground()
 	_draw_anvil()
+	_draw_altar()
+	_draw_aim_marker()
+	for c in corpses:
+		_draw_corpse(c)
+	_draw_rocks_base()
+	# ombre dei proiettili e del bottino: danno l'idea che volino sopra il pavimento
+	for sh in shots:
+		_xf(sh.pos + Vector2(0, 8), 0, Vector2(1, 0.4))
+		draw_circle(Vector2.ZERO, sh.size * 0.9 + 1.5, Color(0, 0, 0, 0.28))
+	for bl in bullets:
+		_xf(bl.pos + Vector2(0, 8), 0, Vector2(1, 0.4))
+		draw_circle(Vector2.ZERO, bl.r + 1.0, Color(0, 0, 0, 0.28))
+	for d in drops:
+		_xf(d.pos + Vector2(0, 3), 0, Vector2(1, 0.4))
+		draw_circle(Vector2.ZERO, 3.5 - minf(d.z, 20.0) * 0.08, Color(0, 0, 0, 0.3))
+	_xr()
 	for d in drops:
 		_draw_drop(d)
+	# dall'alto in basso, così chi sta davanti copre chi sta dietro (anche le rocce)
+	var actors: Array = []
+	for e in enemies:
+		actors.append({"y": e.pos.y, "e": e})
+	for o in obs:
+		actors.append({"y": (o as Rect2).end.y - 4, "rock": o})
+	if state != St.DEAD:
+		actors.append({"y": hero_pos.y, "hero": true})
+	actors.sort_custom(func(x, y): return x.y < y.y)
+	for ac in actors:
+		if ac.has("hero"):
+			_draw_hero()
+			_draw_helpers()
+		elif ac.has("rock"):
+			_draw_rock(ac.rock)
+		else:
+			_draw_enemy(ac.e)
+	# buio attorno all'eroe, poi tutto quello che fa luce
+	_draw_darkness()
+	_draw_lights()
 	for e in enemies:
 		_draw_enemy_telegraph(e)
-	_draw_aim_marker()
-	_draw_rocks()
-	# ombre dei proiettili: danno l'idea che volino sopra il pavimento
-	for sh in shots:
-		draw_set_transform(sh.pos + Vector2(0, 8), 0, Vector2(1, 0.4))
-		draw_circle(Vector2.ZERO, sh.size * 0.9 + 1.5, Color(0, 0, 0, 0.28))
-	for b in bullets:
-		draw_set_transform(b.pos + Vector2(0, 8), 0, Vector2(1, 0.4))
-		draw_circle(Vector2.ZERO, b.r + 1.0, Color(0, 0, 0, 0.28))
-	draw_set_transform(off)
-	# dall'alto in basso, così chi sta davanti copre chi sta dietro
-	var actors: Array = enemies.duplicate()
-	actors.sort_custom(func(a, b): return a.pos.y < b.pos.y)
-	var hero_drawn := false
-	for e in actors:
-		if not hero_drawn and e.pos.y > hero_pos.y and state != St.DEAD:
-			_draw_hero()
-			hero_drawn = true
-		_draw_enemy(e)
-	if not hero_drawn and state != St.DEAD:
-		_draw_hero()
-	if state != St.DEAD:
-		_draw_helpers()
 	for sh in shots:
 		_draw_shot(sh)
-	for b in bullets:
-		Art.glow(self, b.pos, b.r * 3.2, Color(b.col, 0.55))
-		draw_circle(b.pos, b.r + 1.2, OUT)
-		draw_circle(b.pos, b.r, b.col)
-		draw_circle(b.pos - Vector2(b.r, b.r) * 0.3, b.r * 0.45, Color(1, 1, 1, 0.85))
-	for b in bolts:
-		_draw_bolt(b.a, b.b)
+	for bl in bullets:
+		Art.glow(self, bl.pos, bl.r * 3.4, Color(bl.col, 0.6))
+		draw_circle(bl.pos, bl.r + 1.4, OUT)
+		draw_circle(bl.pos, bl.r, bl.col)
+		draw_arc(bl.pos, bl.r + 0.6, 0, TAU, 12, Color(1, 1, 1, 0.5 + 0.3 * sin(time * 20.0)), 0.8, true)
+		draw_circle(bl.pos - Vector2(bl.r, bl.r) * 0.3, bl.r * 0.45, Color(1, 1, 1, 0.85))
+	for bo in bolts:
+		_draw_bolt(bo.a, bo.b)
 	for rg in rings:
 		var k: float = 1.0 - rg.life / rg.max
 		draw_arc(rg.pos, lerpf(rg.r0, rg.r1, k), 0, TAU, 32, Color(rg.col, (1.0 - k) * 0.8), 2.5 * (1.0 - k) + 0.5, true)
-	for p in parts:
-		var c: Color = p.col
-		var a: float = clampf(p.life / p.max * 1.5, 0.0, 1.0)
-		c.a = a
-		draw_circle(p.pos, p.size * 0.9, c)
+	for pt in parts:
+		var c: Color = pt.col
+		c.a = clampf(pt.life / pt.max * 1.5, 0.0, 1.0)
+		draw_circle(pt.pos, pt.size * 0.8, c)
+	# da qui in poi: coordinate dello schermo
+	draw_set_transform(Vector2.ZERO)
 	for f in floats:
 		var a: float = clampf(f.life * 3.0, 0.0, 1.0)
 		var big: bool = f.get("big", false)
 		var age: float = (0.95 if big else 0.75) - f.life
 		var sc := 1.0 + maxf(0.0, 0.12 - age) * (5.0 if big else 3.0)
-		draw_set_transform(f.pos + off, 0, Vector2(sc, sc))
+		var sp := _w2s(f.pos) + off
+		if sp.y < HUD_H + 4 or sp.y > _size().y - BAR_H:
+			continue
+		draw_set_transform(sp, 0, Vector2(sc, sc))
 		PixelFont.draw_centered(self, f.txt, 0, -6, 2 if big else 1, Color(f.col, a), Color(OUT, a))
-		draw_set_transform(off)
+	draw_set_transform(Vector2.ZERO)
 	if touch_index != -1 and (state == St.PLAY or state == St.CLEAR):
 		draw_circle(joy_origin, JOY_RADIUS + 2, Color(0, 0, 0, 0.18))
 		draw_circle(joy_origin, JOY_RADIUS, Color(1, 1, 1, 0.07))
@@ -1502,8 +1663,6 @@ func _draw() -> void:
 		draw_circle(knob, 10, Color(0, 0, 0, 0.25))
 		draw_circle(knob, 9, Color(1, 1, 1, 0.55))
 		draw_circle(knob + Vector2(-2, -2), 4, Color(1, 1, 1, 0.5))
-	draw_set_transform(Vector2.ZERO)
-	_draw_vignette()
 	var low := float(hero_hp) / max_hp < 0.3 and (state == St.PLAY or state == St.CLEAR)
 	if hurt_t > 0.0 or low:
 		var keep := hurt_t
@@ -1516,11 +1675,134 @@ func _draw() -> void:
 	_draw_hud()
 	_draw_bar()
 	_draw_banner()
+	if intro_t > 0.0 and room_n == 1:
+		_draw_intro()
+	if boss_card_t > 0.0:
+		_draw_boss_card()
 	match state:
-		St.FORGE: _draw_forge()
+		St.FORGE:
+			_draw_forge()
+			if not strike.is_empty():
+				_draw_strike()
 		St.PAUSE: _draw_pause()
 		St.LEVEL: _draw_levelup()
 		St.DEAD, St.WIN: _draw_end()
+
+## Buio attorno all'eroe (luce calda che lo segue)
+func _draw_darkness() -> void:
+	var R := 165.0
+	var dc := Color(0.02, 0.0, 0.05, 0.68)
+	var c := hero_pos
+	if state == St.DEAD:
+		c = Vector2(_view_w() / 2.0, cam_y + _view_h() / 2.0)
+	var v := Rect2(-30, cam_y - 30, _view_w() + 60, _view_h() + 60)
+	var lr := Rect2(c - Vector2(R, R), Vector2(R, R) * 2.0)
+	draw_texture_rect(dark_tex, lr, false)
+	draw_rect(Rect2(v.position.x, v.position.y, v.size.x, maxf(0.0, lr.position.y - v.position.y)), dc)
+	draw_rect(Rect2(v.position.x, lr.end.y, v.size.x, maxf(0.0, v.end.y - lr.end.y)), dc)
+	draw_rect(Rect2(v.position.x, lr.position.y, maxf(0.0, lr.position.x - v.position.x), lr.size.y), dc)
+	draw_rect(Rect2(lr.end.x, lr.position.y, maxf(0.0, v.end.x - lr.end.x), lr.size.y), dc)
+
+## Fonti di luce disegnate sopra il buio
+func _draw_lights() -> void:
+	var r := _room_rect()
+	for f in [0.12, 0.32, 0.68, 0.88]:
+		var tx: float = r.position.x + r.size.x * f
+		var ty := TOP_WALL * 0.45
+		var fl := 0.8 + 0.2 * sin(time * 11.0 + tx)
+		Art.glow(self, Vector2(tx, ty), 34 * fl, Color(1, 0.55, 0.2, 0.3))
+		draw_circle(Vector2(tx, ty - 1), 3.0 * fl, Color("ff8a2b"))
+		draw_circle(Vector2(tx, ty - 1.5), 1.6 * fl, Color("ffe14a"))
+	for p in patches:
+		Art.glow(self, p.pos, p.r * 2.6, Color(1, 0.45, 0.1, 0.3 * clampf(p.life, 0.0, 1.0)))
+	if not anvil.is_empty():
+		Art.glow(self, anvil.pos, 44, Color(1, 0.55, 0.2, 0.22 + 0.06 * sin(time * 4.0)))
+	if not altar.is_empty() and not altar.used:
+		Art.glow(self, altar.pos + Vector2(0, -8), 34, Color(1, 0.4, 0.15, 0.3 + 0.1 * sin(time * 5.0)))
+	if door_open:
+		var d := _door_rect()
+		Art.glow(self, Vector2(d.get_center().x, d.end.y), 40, Color(1, 0.7, 0.3, 0.35))
+	for e in enemies:
+		if e.spawn <= 0.0 and (e.k == "imp" or e.k == "boss" or e.burn > 0.0):
+			Art.glow(self, e.pos, e.size * 1.3, Color(1, 0.45, 0.15, 0.25))
+		if e.get("elite", false) and e.spawn <= 0.0:
+			Art.glow(self, e.pos, e.size * 1.5, Color(1, 0.8, 0.2, 0.18 + 0.06 * sin(time * 6.0)))
+
+## Nemico che si sbriciola in cenere
+func _draw_corpse(c: Dictionary) -> void:
+	var k: float = c.t / 0.55
+	var r: float = c.size / 2.0 + 1.0
+	var col: Color = Color(c.col).lerp(Color("8a8090"), minf(1.0, k * 2.0))
+	col.a = 1.0 - k
+	_xf(c.pos + Vector2(0, r * k * 0.6), 0, Vector2(1.0 + k * 0.4, maxf(0.05, 1.0 - k)))
+	draw_circle(Vector2.ZERO, r + 1.5, Color(OUT, 1.0 - k))
+	draw_circle(Vector2.ZERO, r, col)
+	_xr()
+
+func _draw_altar() -> void:
+	if altar.is_empty():
+		return
+	var p: Vector2 = altar.pos
+	_xf(p + Vector2(0, 4), 0, Vector2(1, 0.4))
+	draw_circle(Vector2.ZERO, 13, Color(0, 0, 0, 0.35))
+	_xr()
+	Art.rbox(self, Rect2(p.x - 10, p.y - 6, 20, 10), Color("4a3a46"), OUT, 3, 2)
+	Art.rbox(self, Rect2(p.x - 12, p.y - 10, 24, 6), Color("6a5464"), OUT, 3, 2)
+	if not altar.used:
+		var fl := sin(time * 10.0) * 1.5
+		_poly([p + Vector2(-5, -10), p + Vector2(-2, -20 + fl), p + Vector2(0, -15), p + Vector2(3, -23 - fl), p + Vector2(5, -10)], Color("ff6a2a"))
+		draw_circle(p + Vector2(0, -12), 2.5, Color("ffe14a"))
+		var y := p.y - 36 - 2 * sin(time * 3.0)
+		var label := "Altare delle braci"
+		var tw := PixelFont.text_width(label, 1) + 12
+		Art.rbox(self, Rect2(p.x - 2, y - 2, tw, 14), Color(0, 0, 0, 0.6), Color("ff8a3d"), 7, 1)
+		PixelFont.draw_text(self, label, Vector2(p.x + 4, y), 1, Color("ffc08a"))
+
+## Presentazione del boss, con bande nere da film
+func _draw_boss_card() -> void:
+	var s := _size()
+	var k := clampf((2.4 - boss_card_t) * 4.0, 0.0, 1.0) * clampf(boss_card_t * 3.0, 0.0, 1.0)
+	var band := 44.0 * k
+	draw_rect(Rect2(0, HUD_H, s.x, band), Color(0, 0, 0, 0.9))
+	draw_rect(Rect2(0, s.y - BAR_H - band, s.x, band), Color(0, 0, 0, 0.9))
+	var boss := room_n == Data.BOSS_ROOM
+	var y := s.y * 0.36
+	var slide := (1.0 - k) * 60.0
+	Art.glow(self, Vector2(s.x / 2.0, y + 20), 120, Color(1, 0.25, 0.15, 0.35 * k))
+	PixelFont.draw_centered(self, "Boss" if boss else "Mini-boss", s.x / 2.0 - slide, y, 2, Color(1, 0.55, 0.45, k), Color(OUT, k))
+	PixelFont.draw_centered(self, "Signore della Cenere" if boss else "Golem antico", s.x / 2.0 + slide, y + 18, 3, Color(1, 1, 1, k), Color(OUT, k))
+	var sub := "Debolezza nascosta: scoprila colpendolo" if boss else "Debole al Fulmine"
+	PixelFont.draw_centered(self, sub, s.x / 2.0, y + 48, 1, Color(1, 0.85, 0.5, k), Color(OUT, k))
+
+## Cartolina del capitolo con la mappa delle 12 stanze
+func _draw_intro() -> void:
+	var s := _size()
+	var a := clampf(intro_t * 2.0, 0.0, 1.0) * clampf((2.8 - intro_t) * 4.0, 0.0, 1.0)
+	var r := Rect2(14, s.y * 0.3, s.x - 28, 112)
+	Art.rbox(self, r, Color(0.07, 0.05, 0.14, 0.92 * a), Color(1, 0.75, 0.35, a), 12, 2)
+	PixelFont.draw_centered(self, "Capitolo 1", s.x / 2.0, r.position.y + 10, 2, Color(1, 0.79, 0.29, a), Color(OUT, a))
+	PixelFont.draw_centered(self, "La Fonderia caduta", s.x / 2.0, r.position.y + 28, 3, Color(1, 1, 1, a), Color(OUT, a))
+	_draw_map(Vector2(r.position.x + 14, r.position.y + 76), r.size.x - 28, a)
+
+func _draw_map(pos: Vector2, w: float, a: float = 1.0) -> void:
+	var n := Data.ROOMS
+	var step := w / (n - 1)
+	draw_line(pos, pos + Vector2(w, 0), Color(1, 1, 1, 0.2 * a), 2.0, true)
+	draw_line(pos, pos + Vector2(step * (room_n - 1), 0), Color(1, 0.7, 0.3, 0.9 * a), 2.0, true)
+	for i in n:
+		var rn := i + 1
+		var c := pos + Vector2(i * step, 0)
+		var special := rn in Data.BIG_FORGE_ROOMS or rn == Data.MINIBOSS_ROOM or rn == Data.BOSS_ROOM
+		var rad := 6.0 if special else 4.0
+		var col := Color("ffb03a") if rn < room_n else (Color.WHITE if rn == room_n else Color("4a3f7a"))
+		if rn == room_n:
+			Art.glow(self, c, 14, Color(1, 0.8, 0.4, 0.6 * a))
+		draw_circle(c, rad + 1.5, Color(OUT, a))
+		draw_circle(c, rad, Color(col, a))
+		if rn == Data.BOSS_ROOM or rn == Data.MINIBOSS_ROOM:
+			Art.icon(self, "skull", c - Vector2(3.5, 3.5) * 1.1, 1.1, Color(Art.HP, a))
+		elif rn in Data.BIG_FORGE_ROOMS:
+			Art.icon(self, "anvil", c - Vector2(3.5, 3.5) * 1.1, 1.1, Color(OUT, a))
 
 ## Segno rosso sotto il nemico che stai mirando
 func _draw_aim_marker() -> void:
@@ -1531,12 +1813,12 @@ func _draw_aim_marker() -> void:
 		return
 	var r: float = e.size / 2.0 + 5.0
 	var c: Vector2 = e.pos + Vector2(0, e.size * 0.42)
-	draw_set_transform(c, 0, Vector2(1, 0.45))
+	_xf(c, 0, Vector2(1, 0.45))
 	draw_arc(Vector2.ZERO, r, 0, TAU, 32, Color(1, 0.25, 0.3, 0.35), 3.0, true)
 	for i in 4:
 		var a := time * 2.5 + i * TAU / 4.0
 		draw_arc(Vector2.ZERO, r, a, a + 0.8, 8, Color(1, 0.35, 0.35, 0.95), 2.0, true)
-	draw_set_transform(Vector2.ZERO)
+	_xr()
 
 func _draw_helpers() -> void:
 	var n := _orbit_count()
@@ -1600,16 +1882,17 @@ func _draw_levelup() -> void:
 		var ang := time * 0.6 + i * TAU / 10.0
 		var p := Vector2(s.x / 2.0, ty + 16) + Vector2.from_angle(ang) * (54 + 6 * sin(time * 3.0 + i))
 		draw_circle(p, 1.5, Color(1, 0.8, 0.3, 0.7 * a))
-	PixelFont.draw_centered(self, "Livello %d!" % lvl, s.x / 2.0, ty, 4, Color(1, 0.79, 0.29, a), Color(OUT, a))
-	PixelFont.draw_centered(self, "Scegli un'abilità", s.x / 2.0, ty + 40, 2, Color(1, 1, 1, a), Color(OUT, a))
+	var altar_mode := level_mode == "altar"
+	PixelFont.draw_centered(self, "Altare delle braci" if altar_mode else "Livello %d!" % lvl, s.x / 2.0, ty, 3 if altar_mode else 4, Color(1, 0.79, 0.29, a), Color(OUT, a))
+	PixelFont.draw_centered(self, "Scegli un dono" if altar_mode else "Scegli un'abilità", s.x / 2.0, ty + 40, 2, Color(1, 1, 1, a), Color(OUT, a))
 	var cw := 82.0
 	var ch := 158.0
 	var gap := 5.0
-	var x0 := (s.x - (cw * 3 + gap * 2)) / 2.0
+	var x0 := (s.x - (cw * level_choices.size() + gap * (level_choices.size() - 1))) / 2.0
 	var y0 := s.y * 0.3
 	for i in level_choices.size():
 		var k: String = level_choices[i]
-		var info: Dictionary = Skills.LIST[k]
+		var info: Dictionary = Skills.LIST[k] if Skills.LIST.has(k) else Skills.ALTAR[k]
 		var appear := clampf((lvl_t - i * 0.08) * 5.0, 0.0, 1.0)
 		var r := Rect2(x0 + i * (cw + gap), y0 + (1.0 - appear) * 40.0, cw, ch)
 		ui_rects["skill%d" % i] = r
@@ -1618,7 +1901,7 @@ func _draw_levelup() -> void:
 		_card(r, edge)
 		var ic := Vector2(r.get_center().x, r.position.y + 34)
 		Art.glow(self, ic, 30, Color(edge, 0.5))
-		Skills.icon(self, k, ic, 20)
+		Skills.icon(self, k if Skills.LIST.has(k) else info.icon, ic, 20)
 		var ly := r.position.y + 62
 		for line in _lines(info.name, cw - 8, 2):
 			PixelFont.draw_centered(self, line, r.get_center().x, ly, 2, Color.WHITE, OUT)
@@ -1628,7 +1911,7 @@ func _draw_levelup() -> void:
 			PixelFont.draw_centered(self, line, r.get_center().x, ly, 1, Color("c9bce8"))
 			ly += 11
 		# livello dell'abilità
-		var mx: int = info.max
+		var mx: int = info.get("max", 99)
 		if mx <= 5:
 			var have := _sk(k)
 			var px := r.get_center().x - (mx * 9 - 3) / 2.0
@@ -1662,7 +1945,7 @@ const TILE_B := Color("54443f")
 func _draw_room() -> void:
 	var s := _size()
 	var r := _room_rect()
-	draw_rect(Rect2(Vector2(-4, -4), s + Vector2(8, 8)), Color("0a0816"))
+	draw_rect(Rect2(-60, -60, _view_w() + 120, TOP_WALL + ROOM_H + 200), Color("0a0816"))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = floor_seed
 	var tint := Color(1, 1, 1)
@@ -1701,6 +1984,29 @@ func _draw_room() -> void:
 				var fl := 0.6 + 0.4 * sin(time * 3.0 + p.x)
 				Art.glow(self, p, 6, Color(1, 0.45, 0.1, 0.35 * fl))
 				draw_line(p - Vector2(2, 1), p + Vector2(2, 1), Color(1, 0.55, 0.2, 0.8 * fl), 1.0, true)
+	# decorazioni: sigillo della forgia, ossa, griglie
+	var sc := r.get_center() + Vector2(0, 20)
+	draw_arc(sc, 46, 0, TAU, 48, Color(1, 0.5, 0.2, 0.10), 3.0, true)
+	draw_arc(sc, 38, 0, TAU, 48, Color(1, 0.5, 0.2, 0.07), 1.5, true)
+	for i in 6:
+		var aa := i * TAU / 6.0 + 0.3
+		draw_line(sc + Vector2.from_angle(aa) * 38, sc + Vector2.from_angle(aa + 2.1) * 38, Color(1, 0.5, 0.2, 0.06), 1.5, true)
+	for i in 5:
+		var dp := Vector2(rng.randf_range(r.position.x + 12, r.end.x - 12), rng.randf_range(r.position.y + 20, r.end.y - 20))
+		var kind := rng.randi() % 3
+		if kind == 0:
+			var aa := rng.randf() * TAU
+			var dv := Vector2.from_angle(aa) * 5.0
+			draw_line(dp - dv, dp + dv, Color("cfc6b0", 0.55), 2.0, true)
+			draw_circle(dp - dv, 1.6, Color("cfc6b0", 0.55))
+			draw_circle(dp + dv, 1.6, Color("cfc6b0", 0.55))
+		elif kind == 1:
+			Art.rbox(self, Rect2(dp - Vector2(9, 6), Vector2(18, 12)), Color("1c1414"), Color("3a2c2a"), 2, 1)
+			for j in 4:
+				draw_line(dp + Vector2(-6 + j * 4, -5), dp + Vector2(-6 + j * 4, 5), Color("4a3c38"), 1.2, true)
+		else:
+			for j in 4:
+				draw_circle(dp + Vector2(rng.randf_range(-6, 6), rng.randf_range(-4, 4)), rng.randf_range(2.0, 4.0), Color(0, 0, 0, 0.12))
 	# muro in alto con mattoni
 	var wall := Rect2(r.position.x - WALL_SIZE, r.position.y - TOP_WALL, r.size.x + WALL_SIZE * 2, TOP_WALL)
 	draw_rect(wall, Color("3a2c2c"))
@@ -1728,7 +2034,6 @@ func _draw_room() -> void:
 		var tx: float = r.position.x + r.size.x * f
 		var ty := wall.position.y + TOP_WALL * 0.45
 		var fl := 0.8 + 0.2 * sin(time * 11.0 + tx)
-		Art.glow(self, Vector2(tx, ty), 22 * fl, Color(1, 0.6, 0.25, 0.45))
 		draw_rect(Rect2(tx - 1.5, ty, 3, 7), Color("6b3d22"))
 		draw_circle(Vector2(tx, ty - 1), 3.0 * fl, Color("ff8a2b"))
 		draw_circle(Vector2(tx, ty - 1.5), 1.6 * fl, Color("ffe14a"))
@@ -1759,16 +2064,21 @@ func _poly(pts: Array, col: Color, outline: bool = true) -> void:
 		draw_polyline(q, OUT, 2.0, true)
 	draw_colored_polygon(p, col)
 
-func _draw_rocks() -> void:
+func _draw_rocks_base() -> void:
 	for o in obs:
 		var rr: Rect2 = o
-		# vista 3/4: faccia frontale scura, faccia superiore chiara
-		Art.rbox(self, Rect2(rr.position + Vector2(2, 7), rr.size), Color(0, 0, 0, 0.35), Color(0, 0, 0, 0), 7)
-		Art.rbox(self, Rect2(rr.position + Vector2(0, -4), rr.size + Vector2(0, 4)), Color("3e3230"), OUT, 6, 2)
-		Art.rbox(self, Rect2(rr.position + Vector2(0, -6), Vector2(rr.size.x, rr.size.y - 4)), Color("6e5c56"), OUT, 6, 2)
-		Art.rbox(self, Rect2(rr.position + Vector2(3, -4), Vector2(rr.size.x - 6, 5)), Color("85716a"), Color(0, 0, 0, 0), 3)
-		var c := rr.get_center()
-		draw_polyline(PackedVector2Array([c + Vector2(-3, -7), c + Vector2(1, -1), c + Vector2(-2, 4), c + Vector2(1, 8)]), Color("3a2c2a"), 1.2, true)
+		Art.rbox(self, Rect2(rr.position + Vector2(3, 3), rr.size), Color(0, 0, 0, 0.3), Color(0, 0, 0, 0), 7)
+
+## Colonna di roccia in vista 3/4: faccia frontale scura, cima chiara
+func _draw_rock(rr: Rect2) -> void:
+	Art.rbox(self, Rect2(rr.position + Vector2(0, -8), rr.size + Vector2(0, 8)), Color("3a2e2c"), OUT, 6, 2)
+	for i in 3:
+		draw_line(Vector2(rr.position.x + 5 + i * 8, rr.end.y - 9), Vector2(rr.position.x + 5 + i * 8, rr.end.y - 2), Color(0, 0, 0, 0.25), 1.0, true)
+	Art.rbox(self, Rect2(rr.position + Vector2(0, -10), Vector2(rr.size.x, rr.size.y - 4)), Color("6e5c56"), OUT, 6, 2)
+	Art.rbox(self, Rect2(rr.position + Vector2(3, -8), Vector2(rr.size.x - 6, 5)), Color("8a766e"), Color(0, 0, 0, 0), 3)
+	var c := rr.get_center() + Vector2(0, -6)
+	draw_polyline(PackedVector2Array([c + Vector2(-3, -6), c + Vector2(1, -1), c + Vector2(-2, 3), c + Vector2(1, 6)]), Color("3a2c2a"), 1.2, true)
+	draw_circle(rr.position + Vector2(rr.size.x - 6, 0), 2.0, Color("6a9a4a"))
 
 func _draw_vignette() -> void:
 	var s := _size()
@@ -1801,7 +2111,7 @@ func _draw_anvil() -> void:
 	var p: Vector2 = anvil.pos
 	var big: bool = anvil.big
 	Art.glow(self, p, 40 if not big else 54, Color(1, 0.55, 0.2, 0.35 + 0.1 * sin(time * 4.0)))
-	draw_set_transform(p + Vector2(0, 0), 0, Vector2.ONE * (0.42 if not big else 0.55))
+	_xf(p, 0, Vector2.ONE * (0.42 if not big else 0.55))
 	# stessa incudine del titolo, più piccola
 	draw_rect(Rect2(-26, 22, 52, 30), OUT)
 	draw_rect(Rect2(-24, 24, 48, 26), Color("6b3d22"))
@@ -1810,7 +2120,7 @@ func _draw_anvil() -> void:
 	draw_rect(Rect2(-30, -9, 62, 4), Color("8a90b0"))
 	var hot := Color("ff7a1a").lerp(Color("ffe14a"), 0.5 + 0.3 * sin(time * 4.0))
 	Art.rbox(self, Rect2(-26, -16, 44, 6), hot, OUT, 3, 2)
-	draw_set_transform(Vector2.ZERO)
+	_xr()
 	var label := "Incudine" if not big else "Fucina grande"
 	var y := p.y - 26 - 2 * sin(time * 3.0)
 	var tw := PixelFont.text_width(label, 1) + 12
@@ -1818,7 +2128,7 @@ func _draw_anvil() -> void:
 	PixelFont.draw_centered(self, label, p.x, y, 1, Color("ffd36b"))
 
 func _draw_drop(d: Dictionary) -> void:
-	var p: Vector2 = d.pos
+	var p: Vector2 = d.pos - Vector2(0, d.z + 2.0 + sin(time * 5.0 + d.pos.x) * 0.8)
 	match d.kind:
 		"spark":
 			Art.glow(self, p, 6, Color(1, 0.55, 0.15, 0.6))
@@ -1893,13 +2203,13 @@ func _eyes(c: Vector2, look: Vector2, sep: float, r: float, pupil: Color = OUT, 
 
 func _body(c: Vector2, r: float, col: Color, squash: float = 1.0) -> void:
 	# corpo tondo con contorno, ombra e riflesso (come gli slime di Braceforte 2)
-	draw_set_transform(c, 0, Vector2(1.0 / squash, squash))
+	_xf(c, 0, Vector2(1.0 / squash, squash))
 	draw_circle(Vector2.ZERO, r + 1.6, OUT)
 	draw_circle(Vector2.ZERO, r, col)
 	draw_circle(Vector2(0, r * 0.25), r * 0.8, col.darkened(0.12))
 	draw_circle(Vector2(0, -r * 0.08), r * 0.78, col)
 	draw_circle(Vector2(-r * 0.38, -r * 0.42), r * 0.22, Color(1, 1, 1, 0.45))
-	draw_set_transform(Vector2.ZERO)
+	_xr()
 
 func _draw_enemy(e: Dictionary) -> void:
 	if e.spawn > 0.0:
@@ -1910,18 +2220,33 @@ func _draw_enemy(e: Dictionary) -> void:
 	var col := _enemy_color(e)
 	var look: Vector2 = (hero_pos - c).normalized()
 	# ombra
-	draw_set_transform(c + Vector2(0, r * 0.85), 0, Vector2(1, 0.38))
+	_xf(c + Vector2(0, r * 0.85), 0, Vector2(1, 0.38))
 	draw_circle(Vector2.ZERO, r * 0.95, Color(0, 0, 0, 0.32))
-	draw_set_transform(Vector2.ZERO)
+	_xr()
+	if e.get("elite", false):
+		_xf(c + Vector2(0, r * 0.85), 0, Vector2(1, 0.4))
+		for i in 6:
+			var aa := time * 2.0 + i * TAU / 6.0
+			draw_arc(Vector2.ZERO, r + 5, aa, aa + 0.6, 6, Color(1, 0.8, 0.25, 0.9), 2.0, true)
+		_xr()
 	if e.dead_t > 0.0:
 		# a terra: si sta per rialzare
 		_body(c + Vector2(0, r * 0.4), r * 0.8, col.darkened(0.3), 0.55)
 		if fmod(time * 6.0, 2.0) < 1.0:
 			PixelFont.draw_centered(self, "!", c.x, c.y - r - 8, 2, Color("ff3d5a"), OUT)
 		return
-	var bob := sin(time * 6.0 + c.x) * 1.0
-	var squash := 1.0 + sin(time * 7.0 + c.y) * 0.05
+	var moving: bool = e.vel.length() > 3.0
+	var bob: float = absf(sin(time * 9.0 + c.x)) * -2.0 if moving else sin(time * 4.0 + c.x) * 0.8
+	var squash: float = 1.0 + sin(time * 7.0 + c.y) * 0.05 - e.flash * 0.18
 	var bc := c + Vector2(0, bob)
+	# piedi che camminano
+	if e.k in ["zombie", "archer", "spitter", "golem", "pebble", "miniboss", "boss"]:
+		var fc := col.darkened(0.45)
+		var stp := sin(time * 12.0 + c.x) * (r * 0.25 if moving else 0.0)
+		for sx in [-1.0, 1.0]:
+			var fp := c + Vector2(sx * r * 0.45, r * 0.78 + stp * sx)
+			draw_circle(fp, r * 0.26 + 1.2, OUT)
+			draw_circle(fp, r * 0.26, fc)
 	match e.k:
 		"zombie":
 			_body(bc, r, col, squash)
@@ -2003,75 +2328,113 @@ func _draw_enemy(e: Dictionary) -> void:
 		var by := bc.y - r - 7
 		if e.hp < e.max:
 			Art.rbox(self, Rect2(c.x - bw / 2.0, by, bw, 4), Color("2a1020"), OUT, 2, 1)
-			Art.rbox(self, Rect2(c.x - bw / 2.0 + 1, by + 1, (bw - 2) * clampf(e.hp / e.max, 0.0, 1.0), 2), Color("ff3d5a"), Color(0, 0, 0, 0), 1)
+			Art.rbox(self, Rect2(c.x - bw / 2.0 + 1, by + 1, (bw - 2) * clampf(e.hp / e.max, 0.0, 1.0), 2), Color("ffc531") if e.get("elite", false) else Color("ff3d5a"), Color(0, 0, 0, 0), 1)
 		Art.el_badge(self, _weak_of(e), Vector2(c.x, by - 7), 4.5)
 
+## Il fabbro guerriero: mantello, grembiule di cuoio, elmo con pennacchio di fiamma
 func _draw_hero() -> void:
-	var half := HERO_SIZE / 2.0
 	var blink := hero_inv > 0.0 and fmod(time * 16.0, 2.0) < 1.0
 	var moving := hero_vel.length() > 5.0
-	var bob := absf(sin(step_t * 1.6)) * 2.0 if moving else sin(time * 3.0) * 0.6
-	var c := hero_pos + Vector2(0, -bob)
-	var r := half + 1.5
+	var ph := step_t * 1.6
+	var bob := absf(sin(ph)) * 1.8 if moving else sin(time * 3.0) * 0.5
+	var p := hero_pos
+	var c := p + Vector2(0, -bob)
+	var fx := facing
+	var back := fx.y < -0.55       # di spalle: si vede il mantello
 	# ombra
-	draw_set_transform(hero_pos + Vector2(0, r * 0.9), 0, Vector2(1, 0.38))
-	draw_circle(Vector2.ZERO, r, Color(0, 0, 0, 0.35))
-	draw_set_transform(Vector2.ZERO)
-	if blink:
-		return
+	_xf(p + Vector2(0, 10), 0, Vector2(1, 0.38))
+	draw_circle(Vector2.ZERO, 11, Color(0, 0, 0, 0.38))
+	_xr()
 	var wc := _shot_color(_w())
 	if _w().slots != ["", ""]:
-		Art.glow(self, c, r * 2.2, Color(wc, 0.25))
-	# corpo (armatura scura)
-	draw_circle(c + Vector2(0, 2), r + 1.6, OUT)
-	draw_circle(c + Vector2(0, 2), r, Color("3d3a5c"))
-	draw_circle(c + Vector2(0, 4), r * 0.55, Color("2a2844"))
-	draw_circle(c + Vector2(0, r * 0.5 + 2), 1.6, Art.GOLD)
-	# casco
-	var hc := c + Vector2(0, -r * 0.35)
-	draw_circle(hc, r * 0.82 + 1.6, OUT)
-	draw_circle(hc, r * 0.82, Color("5a5f7a"))
-	draw_circle(hc + Vector2(-r * 0.25, -r * 0.3), r * 0.25, Color(1, 1, 1, 0.35))
-	# visiera con occhi che guardano dove va
-	var vf := facing * Vector2(2.0, 1.0)
-	Art.rbox(self, Rect2(hc.x - r * 0.6 + vf.x, hc.y - 1 + maxf(vf.y, -1), r * 1.2, 4), OUT, Color(0, 0, 0, 0), 2)
-	draw_circle(hc + Vector2(-2.2 + vf.x, 1 + maxf(vf.y, -1)), 0.9, Color("ffd36b"))
-	draw_circle(hc + Vector2(2.2 + vf.x, 1 + maxf(vf.y, -1)), 0.9, Color("ffd36b"))
+		Art.glow(self, c, 26, Color(wc, 0.22))
+	if blink:
+		return
+	# piedi
+	var stp := sin(ph) * 3.0 if moving else 0.0
+	for sx in [-1.0, 1.0]:
+		var fp := p + Vector2(sx * 4.0, 8.5 + stp * sx * 0.6)
+		draw_circle(fp, 3.2, OUT)
+		draw_circle(fp, 2.4, Color("3a2a22"))
+	# mantello (dietro, oppure davanti se di spalle)
+	var sway := sin(time * 5.0) * 1.0 - hero_vel.x * 0.03
+	var cape := [c + Vector2(-6, -3), c + Vector2(6, -3), c + Vector2(8 + sway, 9 + absf(sway) * 0.3), c + Vector2(0 + sway, 11), c + Vector2(-8 + sway, 9)]
+	if not back:
+		_poly(cape, Color("8a2436"))
+	# corpo con armatura
+	draw_circle(c + Vector2(0, 2), 8.6, OUT)
+	draw_circle(c + Vector2(0, 2), 7.4, Color("434266"))
+	draw_circle(c + Vector2(-2.5, -0.5), 2.2, Color(1, 1, 1, 0.18))
+	if not back:
+		# grembiule di cuoio con cintura e runa che brilla
+		_poly([c + Vector2(-4.5, 1), c + Vector2(4.5, 1), c + Vector2(4, 9), c + Vector2(-4, 9)], Color("8a5530"))
+		draw_line(c + Vector2(-6.5, 1.5), c + Vector2(6.5, 1.5), Color("c99a3a"), 1.6, true)
+		Art.glow(self, c + Vector2(0, 5), 5, Color(1, 0.6, 0.2, 0.6 + 0.3 * sin(time * 4.0)))
+		draw_circle(c + Vector2(0, 5), 1.1, Color("ffd36b"))
+	else:
+		_poly(cape, Color("8a2436"))
+		draw_line(c + Vector2(-2, 0), c + Vector2(1 + sway, 9), Color(0, 0, 0, 0.2), 1.0, true)
+	# spallacci
+	for sx in [-1.0, 1.0]:
+		var sp := c + Vector2(sx * 7.0, -1.0)
+		draw_circle(sp, 3.6, OUT)
+		draw_circle(sp, 2.7, Color("7a80a0"))
+		draw_circle(sp + Vector2(-0.8, -0.8), 1.0, Color(1, 1, 1, 0.35))
+	# testa ed elmo
+	var hc := c + Vector2(0, -7)
+	draw_circle(hc, 7.6, OUT)
+	draw_circle(hc, 6.4, Color("6a7090"))
+	draw_circle(hc + Vector2(0, 1.5), 5.6, Color("5a5f7c"))
+	draw_circle(hc + Vector2(-2.2, -2.5), 1.8, Color(1, 1, 1, 0.35))
+	if not back:
+		var vf := Vector2(fx.x * 2.0, maxf(fx.y, -0.4) * 1.2)
+		Art.rbox(self, Rect2(hc.x - 4.6 + vf.x, hc.y - 0.8 + vf.y, 9.2, 3.4), OUT, Color(0, 0, 0, 0), 2)
+		for sx in [-1.0, 1.0]:
+			var ep := hc + Vector2(sx * 2.0 + vf.x, 0.9 + vf.y)
+			Art.glow(self, ep, 3.5, Color(1, 0.7, 0.2, 0.8))
+			draw_circle(ep, 0.9, Color("ffe08a"))
 	# pennacchio di fiamma
-	var fl := sin(time * 10.0) * 1.0
-	_poly([hc + Vector2(-1.5, -r * 0.75), hc + Vector2(1, -r * 1.55 + fl), hc + Vector2(4.5, -r * 1.1 - fl), hc + Vector2(2.5, -r * 0.7)], Color("ff5a2a"))
-	# arma in mano
-	var hand := c + facing * (r + 2) + Vector2(0, 2)
-	var a := facing.angle()
+	var fl := sin(time * 11.0) * 1.2
+	_poly([hc + Vector2(-2, -5.5), hc + Vector2(0.5, -12.5 + fl), hc + Vector2(2.5, -9), hc + Vector2(5, -13 - fl), hc + Vector2(4, -5.5)], Color("ff5a2a"))
+	draw_circle(hc + Vector2(1.6, -7.5), 1.4, Color("ffd36b"))
+	# arma in mano (con rinculo)
+	# l'arma sta nella mano destra, di lato: non copre la testa
+	var side := Vector2(-fx.y, fx.x) * -6.0
+	if side.x < 0.0:
+		side = -side
+	var hand := c + fx * (7.0 - recoil * 2.0) + side * 0.9 + Vector2(0, 2)
+	var a := fx.angle()
 	match _w().key:
 		"sword":
-			var tip := hand + facing * 10
-			draw_line(hand, tip, OUT, 4.0, true)
-			draw_line(hand, tip, Color("e8ecf8"), 2.0, true)
-			draw_line(hand - facing.orthogonal() * 3, hand + facing.orthogonal() * 3, Color("8a6a40"), 2.0, true)
+			var tip := hand + fx * 12
+			draw_line(hand, tip, OUT, 4.2, true)
+			draw_line(hand, tip, Color("e8ecf8"), 2.2, true)
+			draw_line(hand - fx.orthogonal() * 3.5, hand + fx.orthogonal() * 3.5, Color("c99a3a"), 2.2, true)
 			if wc != Data.WEAPONS.sword.color:
-				draw_line(hand + facing * 3, tip, Color(wc, 0.8), 1.0, true)
+				draw_line(hand + fx * 3, tip, Color(wc, 0.85), 1.2, true)
 		"bow":
-			draw_arc(hand, 6, a - 1.3, a + 1.3, 10, OUT, 3.5, true)
-			draw_arc(hand, 6, a - 1.3, a + 1.3, 10, Color("c8a070"), 2.0, true)
-			draw_line(hand + Vector2.from_angle(a - 1.3) * 6, hand + Vector2.from_angle(a + 1.3) * 6, Color(1, 1, 1, 0.7), 1.0, true)
+			draw_arc(hand, 7, a - 1.3, a + 1.3, 12, OUT, 3.8, true)
+			draw_arc(hand, 7, a - 1.3, a + 1.3, 12, Color("c8a070"), 2.2, true)
+			var pull := hand - fx * (2.5 * recoil)
+			draw_line(hand + Vector2.from_angle(a - 1.3) * 7, pull, Color(1, 1, 1, 0.75), 1.0, true)
+			draw_line(hand + Vector2.from_angle(a + 1.3) * 7, pull, Color(1, 1, 1, 0.75), 1.0, true)
 		"staff":
-			var top := hand + Vector2(facing.x * 4, -8)
-			draw_line(hand + Vector2(0, 5), top, OUT, 3.5, true)
-			draw_line(hand + Vector2(0, 5), top, Color("8a6a40"), 2.0, true)
-			Art.glow(self, top, 7, Color(wc, 0.7))
-			draw_circle(top, 2.6, OUT)
-			draw_circle(top, 2.0, wc)
+			var top := hand + Vector2(fx.x * 4, -10)
+			draw_line(hand + Vector2(0, 6), top, OUT, 3.8, true)
+			draw_line(hand + Vector2(0, 6), top, Color("8a6a40"), 2.2, true)
+			Art.glow(self, top, 9 + recoil * 4, Color(wc, 0.75))
+			draw_circle(top, 3.0, OUT)
+			draw_circle(top, 2.3, wc)
 	if hero_flash > 0.0:
-		draw_circle(c, r + 2, Color(1, 0.2, 0.2, hero_flash * 0.55))
-	# barra della vita sopra l'eroe (come Braceforte 2)
+		draw_circle(c, 11, Color(1, 0.25, 0.25, hero_flash * 0.55))
+	# barra della vita sopra l'eroe
 	var bw := 30.0
-	var by := c.y - r - 16
-	Art.rbox(self, Rect2(hero_pos.x - bw / 2.0, by, bw, 5), Color("10201a"), OUT, 3, 1)
+	var by := c.y - 30
 	var hk := float(hero_hp) / max_hp
 	var hcol := Art.GREEN if hk > 0.5 else (Color("ffd24a") if hk > 0.25 else Art.HP)
-	Art.rbox(self, Rect2(hero_pos.x - bw / 2.0 + 1, by + 1, (bw - 2) * hk, 3), hcol, Color(0, 0, 0, 0), 2)
-	PixelFont.draw_centered(self, str(hero_hp), hero_pos.x, by - 11, 1, Color.WHITE, OUT)
+	Art.rbox(self, Rect2(p.x - bw / 2.0, by, bw, 5), Color("10201a"), OUT, 3, 1)
+	Art.rbox(self, Rect2(p.x - bw / 2.0 + 1, by + 1, (bw - 2) * hk, 3), hcol, Color(0, 0, 0, 0), 2)
+	PixelFont.draw_centered(self, str(hero_hp), p.x, by - 11, 1, Color.WHITE, OUT)
 
 func _draw_shot(s: Dictionary) -> void:
 	var col: Color = s.col
@@ -2212,19 +2575,25 @@ func _draw_bar() -> void:
 
 func _draw_banner() -> void:
 	var s := _size()
-	if banner_t > 0.0:
+	if banner_t > 0.0 and not (intro_t > 0.0 and room_n == 1) and boss_card_t <= 0.0:
 		var a := clampf(banner_t * 2.0, 0.0, 1.0)
-		var y := HUD_H + TOP_WALL + 30
+		var y := HUD_H + 34
 		var t := PixelFont.nice(banner)
-		var w := PixelFont.text_width(t, 2) + 28
-		Art.rbox(self, Rect2(s.x / 2.0 - w / 2.0, y - 6, w, 28), Color(0.08, 0.06, 0.16, 0.85 * a), Color(1, 0.83, 0.42, a), 9, 2)
-		PixelFont.draw_centered(self, t, s.x / 2.0, y, 2, Color(1, 1, 1, a))
-	var r := _room_rect()
-	if room_n == 1 and time < 7.0 and state == St.PLAY:
-		PixelFont.draw_centered(self, "Trascina per muoverti", s.x / 2.0, r.end.y - 44, 2, Color.WHITE, OUT)
-		PixelFont.draw_centered(self, "Fermati per attaccare", s.x / 2.0, r.end.y - 26, 2, Color("ffd36b"), OUT)
+		var w := PixelFont.text_width(t, 2) + 34
+		var sc := 1.0 + maxf(0.0, banner_t - 1.8) * 2.5
+		draw_set_transform(Vector2(s.x / 2.0, y + 8), 0, Vector2(sc, sc))
+		# nastro con le code
+		_poly([Vector2(-w / 2.0 - 12, -8), Vector2(-w / 2.0, -8), Vector2(-w / 2.0, 14), Vector2(-w / 2.0 - 12, 14), Vector2(-w / 2.0 - 6, 3)], Color(0.55, 0.2, 0.12, a))
+		_poly([Vector2(w / 2.0 + 12, -8), Vector2(w / 2.0, -8), Vector2(w / 2.0, 14), Vector2(w / 2.0 + 12, 14), Vector2(w / 2.0 + 6, 3)], Color(0.55, 0.2, 0.12, a))
+		Art.rbox(self, Rect2(-w / 2.0, -14, w, 28), Color(0.1, 0.06, 0.18, 0.92 * a), Color(1, 0.75, 0.35, a), 8, 2)
+		PixelFont.draw_centered(self, t, 0, -8, 2, Color(1, 1, 1, a), Color(OUT, a))
+		draw_set_transform(Vector2.ZERO)
+	var by := s.y - BAR_H
+	if room_n == 1 and time < 9.0 and time > 2.8 and state == St.PLAY:
+		PixelFont.draw_centered(self, "Trascina per muoverti", s.x / 2.0, by - 50, 2, Color.WHITE, OUT)
+		PixelFont.draw_centered(self, "Fermati per attaccare", s.x / 2.0, by - 32, 2, Color("ffd36b"), OUT)
 	if state == St.CLEAR and not anvil.is_empty() and not anvil_lock and room_n <= 2:
-		PixelFont.draw_centered(self, "Vai all'incudine o esci dal cancello", s.x / 2.0, r.end.y - 24, 1, Color.WHITE, OUT)
+		PixelFont.draw_centered(self, "Vai all'incudine o esci dal cancello", s.x / 2.0, by - 22, 1, Color.WHITE, OUT)
 
 ## Carta in stile Braceforte 2
 func _card(r: Rect2, edge: Color = Color("a6a0c0")) -> void:
@@ -2312,6 +2681,58 @@ func _draw_forge() -> void:
 		ui_rects["exit"] = er
 		Art.button(self, er, "Esci", Color("1fa65a"))
 
+## Colpo di martello: tocca quando il segno è al centro
+func _strike_pos() -> float:
+	return absf(fmod(float(strike.t) * 1.7, 2.0) - 1.0)
+
+func _resolve_strike() -> void:
+	if strike.is_empty():
+		return
+	var d := absf(_strike_pos() - 0.5)
+	var price: int = strike.price
+	var col: Color = Data.EL_COLOR[strike.el]
+	if strike.t > 2.6:
+		d = 1.0
+	if d < 0.08:
+		var back := price / 2
+		sparks += back
+		forge_msg = "COLPO PERFETTO! +%d SCINTILLE" % back
+		Sfx.play("clang", 0.0, 4.0)
+		shake = maxf(shake, 1.4)
+		_burst(anvil.pos, Color("ffe14a"), 30)
+	elif d < 0.2:
+		var back := price / 5
+		sparks += back
+		forge_msg = "BUON COLPO: +%d SCINTILLE" % back
+		Sfx.play("clang", 0.05)
+		shake = maxf(shake, 0.7)
+	else:
+		forge_msg = "COLPO STORTO: NESSUN RIMBORSO"
+		Sfx.play("hit", 0.0)
+	_burst(anvil.pos, col, 12)
+	strike = {}
+
+func _draw_strike() -> void:
+	var s := _size()
+	var r := Rect2(16, s.y * 0.6, s.x - 32, 104)
+	draw_rect(Rect2(Vector2.ZERO, s), Color(0, 0, 0, 0.35))
+	_card(r, Color("ffe14a"))
+	PixelFont.draw_centered(self, "Colpisci al momento giusto!", s.x / 2.0, r.position.y + 10, 2, Color("ffd36b"), OUT)
+	PixelFont.draw_centered(self, "Tocca quando il martello è nell'oro", s.x / 2.0, r.position.y + 28, 1, Art.TEXT_DIM)
+	var bar := Rect2(r.position.x + 16, r.position.y + 64, r.size.x - 32, 14)
+	Art.rbox(self, bar, Color("1b1535"), OUT, 7, 2)
+	var good := Rect2(bar.position.x + bar.size.x * 0.3, bar.position.y + 2, bar.size.x * 0.4, bar.size.y - 4)
+	Art.rbox(self, good, Color("8a5a20"), Color(0, 0, 0, 0), 5)
+	var perf := Rect2(bar.position.x + bar.size.x * 0.42, bar.position.y + 1, bar.size.x * 0.16, bar.size.y - 2)
+	Art.glow(self, perf.get_center(), 22, Color(1, 0.8, 0.2, 0.5))
+	Art.rbox(self, perf, Color("ffd24a"), Color(0, 0, 0, 0), 5)
+	var mx := bar.position.x + bar.size.x * _strike_pos()
+	draw_line(Vector2(mx, bar.position.y - 6), Vector2(mx, bar.end.y + 6), OUT, 5.0, true)
+	draw_line(Vector2(mx, bar.position.y - 6), Vector2(mx, bar.end.y + 6), Color.WHITE, 2.5, true)
+	Art.icon(self, "anvil", Vector2(mx - 7, bar.position.y - 22), 2.0, Color("d8dcef"))
+	var left := maxf(0.0, 2.6 - float(strike.t))
+	Art.rbox(self, Rect2(bar.position.x, bar.end.y + 10, bar.size.x * left / 2.6, 3), Color(1, 1, 1, 0.4), Color(0, 0, 0, 0), 2)
+
 func _weak_hint(slots: Array) -> String:
 	var parts_txt: Array = []
 	for fam in Data.FAMILIES:
@@ -2353,6 +2774,11 @@ func _draw_pause() -> void:
 		PixelFont.draw_centered(self, "Nessuna: sali di livello sconfiggendo nemici", s.x / 2.0, r2.end.y + 62, 1, Art.TEXT_DIM)
 	else:
 		_draw_skill_row(r2.end.y + 70)
+	PixelFont.draw_centered(self, "Capitolo 1 · stanza %d di %d" % [room_n, Data.ROOMS], s.x / 2.0, r2.end.y + 96, 1, Color.WHITE)
+	_draw_map(Vector2(24, r2.end.y + 124), s.x - 48)
+	var sr := Rect2(s.x / 2.0 - 60, r2.end.y + 146, 120, 26)
+	ui_rects["sound"] = sr
+	Art.button(self, sr, "Suoni: sì" if Save.sound else "Suoni: no", Color("3fae6a") if Save.sound else Color("5b5577"), true, 1)
 
 func _draw_end() -> void:
 	if end_t < 0.8:
@@ -2431,6 +2857,8 @@ func _autotest_step() -> void:
 			if not offers[i].sold and sparks >= _price():
 				_ui_action("offer%d" % i)
 				_ui_action("slot%d%d" % [purchases % 2, (purchases / 2) % 2])
+				strike.t = randf() * 1.2
+				_resolve_strike()
 		if forge_big:
 			_ui_action("reroll")
 			_ui_action("slot00")

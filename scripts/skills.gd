@@ -23,6 +23,12 @@ const LIST := {
 	"spark": {"name": "Mantice", "desc": "Più scintille per la forgia", "max": 2, "cat": "util"},
 }
 
+## Doni dell'Altare delle braci
+const ALTAR := {
+	"altar_heal": {"name": "Fiamma che cura", "desc": "Recuperi il 60% della vita", "cat": "def", "icon": "heal"},
+	"altar_skill": {"name": "Dono della brace", "desc": "Un'abilità a caso, subito", "cat": "atk", "icon": "spark"},
+}
+
 const CAT_COLOR := {"atk": Color("ff7a2a"), "def": Color("3fcf7a"), "util": Color("4aa8ff")}
 const OUT := Color("120c24")
 

@@ -17,6 +17,7 @@ var uid := 1
 var shop_day := ""             # giorno delle offerte del giorno
 var shop_bought: Array = []    # offerte del giorno già comprate
 var gift_day := ""             # giorno dell'ultimo regalo gratis
+var sound := true              # suoni e musica
 
 func _ready() -> void:
 	load_game()
@@ -49,6 +50,7 @@ func load_game() -> void:
 	best_room = int(d.get("best_room", 0))
 	runs = int(d.get("runs", 0))
 	wins = int(d.get("wins", 0))
+	sound = bool(d.get("sound", true))
 	if int(d.get("version", 1)) < VERSION:
 		return   # salvataggio vecchio: si tengono solo oro, gemme e record
 	var m = d.get("materials", {})
@@ -77,7 +79,7 @@ func save_game() -> void:
 	if f == null:
 		return
 	f.store_string(JSON.stringify({
-		"version": VERSION, "gold": gold, "gems": gems, "best_room": best_room,
+		"version": VERSION, "sound": sound, "gold": gold, "gems": gems, "best_room": best_room,
 		"runs": runs, "wins": wins, "materials": materials, "items": items,
 		"equipped": equipped, "recipes": recipes, "uid": uid,
 		"shop_day": shop_day, "shop_bought": shop_bought, "gift_day": gift_day,

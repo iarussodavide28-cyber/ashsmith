@@ -4,7 +4,7 @@ config_version=5
 [application]
 
 config/name="Ashsmith"
-config/version="0.7"
+config/version="1.0"
 run/main_scene="res://scenes/title.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 boot_splash/bg_color=Color(0.078, 0.059, 0.165, 1)
@@ -13,6 +13,7 @@ boot_splash/show_image=false
 [autoload]
 
 Save="*res://scripts/save.gd"
+Sfx="*res://scripts/sfx.gd"
 
 [display]
 
