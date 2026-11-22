@@ -109,6 +109,12 @@ var lvl_t := 0.0
 var hitstop := 0.0
 var volley_q: Array = []
 var rings: Array = []
+var slashes: Array = []
+var tip := {}                 # consiglio del tutorial mostrato ora
+var tip_t := 0.0
+var tut_moved := 0.0
+var tut_kills := 0
+var gallery := false          # solo per le prove: nemici fermi in vetrina       # fendenti della spada
 var aim_target = null
 var fade_t := 0.0
 var hurt_t := 0.0
@@ -189,6 +195,22 @@ func _debug_params() -> void:
 					skills[k] = _sk(k) + 1
 		elif kv[0] == "forge" and not anvil.is_empty():
 			_open_forge()
+		elif kv[0] == "w":
+			var ks := kv[1].split(",")
+			for i in mini(2, ks.size()):
+				if Data.WEAPONS.has(ks[i]):
+					weapons[i].key = ks[i]
+		elif kv[0] == "gallery":
+			gallery = true
+			enemies.clear()
+			waves = []
+			var rr := _room_rect()
+			var ks := ["zombie", "archer", "imp", "spitter", "pebble", "golem", "miniboss", "boss"]
+			var offs := [Vector2(-62, -120), Vector2(0, -120), Vector2(62, -120), Vector2(-62, -55), Vector2(0, -55), Vector2(62, -55), Vector2(-50, 40), Vector2(50, 40)]
+			for i in ks.size():
+				var ge := _spawn_enemy(ks[i], rr.get_center() + offs[i])
+				ge.spawn = 0.0
+			hero_pos = rr.get_center() + Vector2(0, 110)
 		elif kv[0] == "pause":
 			state = St.PAUSE
 		elif kv[0] == "end" and not OS.has_feature("web"):
@@ -396,6 +418,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
 		if t.pressed:
+			if tip.get("block", false):
+				if tip_t > 0.5:
+					_tip_done(str(tip.id))
+				return
 			if state == St.FORGE or state == St.PAUSE or state == St.DEAD or state == St.WIN or state == St.LEVEL:
 				_ui_tap(t.position)
 				return
@@ -424,6 +450,7 @@ func _try_switch() -> void:
 	if switch_t > 0.0 or weapons.size() < 2:
 		return
 	cur_w = 1 - cur_w
+	_tip_done("switch")
 	switch_t = Data.SWITCH_COOLDOWN
 	atk_t = minf(atk_t, 0.15)
 	switch_bonus = true
@@ -443,6 +470,11 @@ func _process(delta: float) -> void:
 	hurt_t = maxf(0.0, hurt_t - dt * 2.5)
 	if autotest:
 		_autotest_step()
+	tip_t += delta
+	_tutorial_step()
+	if tip.get("block", false):
+		queue_redraw()
+		return
 	if hitstop > 0.0:
 		# piccolo fermo immagine quando un colpo va a segno forte
 		hitstop -= delta
@@ -507,6 +539,7 @@ func _update_hero(dt: float) -> void:
 	else:
 		hero_vel = hero_vel.move_toward(Vector2.ZERO, FRICTION * dt)
 	hero_pos += hero_vel * dt
+	tut_moved += hero_vel.length() * dt
 	var r := _room_rect()
 	var half := HERO_SIZE / 2.0
 	# porta aperta: si può uscire dall'alto
@@ -597,6 +630,12 @@ func _update_attack(dt: float) -> void:
 	var tg = aim_target
 	if tg == null:
 		return
+	if _w().key == "sword":
+		tg = _nearest_enemy(hero_pos, [], _sword_reach() + 30.0)
+		if tg == null:
+			return
+		if hero_pos.distance_to(tg.pos) - tg.size / 2.0 > _sword_reach():
+			return
 	var dir: Vector2 = (tg.pos - hero_pos).normalized()
 	facing = dir
 	last_dir = dir
@@ -606,9 +645,59 @@ func _update_attack(dt: float) -> void:
 	for i in _sk("multi"):
 		volley_q.append({"t": 0.12 * (i + 1)})
 
+func _sword_reach() -> float:
+	return _wdata().range + 5.0 * _sk("front")
+
+## Fendente: colpisce subito tutti i nemici nell'arco davanti all'eroe
+func _sword_slash(dir: Vector2, mult: float, sure_crit: bool) -> void:
+	var wd := _wdata()
+	var w := _w()
+	var col := _shot_color(w)
+	var reach := _sword_reach()
+	var half := 1.05 + 0.18 * _sk("front") + 0.3 * _sk("diag")
+	if _sk("side") > 0 or _sk("back") > 0:
+		half = PI
+	var flip := 1.0 if int(time * 10.0) % 2 == 0 else -1.0
+	var crit_ch: float = bonus.crit + 0.1 * _sk("crit") + wd.crit
+	var dmg: float = wd.dmg * _atk_mult() * mult * (1.3 if sure_crit else 1.0)
+	var hit_any := false
+	var any_crit := false
+	for e in enemies.duplicate():
+		if e.spawn > 0.0 or e.dead_t > 0.0:
+			continue
+		var to: Vector2 = e.pos - hero_pos
+		if to.length() - e.size / 2.0 > reach:
+			continue
+		if absf(angle_difference(dir.angle(), to.angle())) > half + 0.25:
+			continue
+		var crit: bool = sure_crit or randf() < crit_ch
+		any_crit = any_crit or crit
+		hit_any = true
+		_hit_enemy(e, dmg * (2.0 if crit else 1.0), w.slots, true, crit, to.normalized() * 210.0)
+		# scintille del taglio
+		for i in 7:
+			var sd := to.normalized().rotated(randf_range(-0.6, 0.6))
+			parts.append({"pos": e.pos - to.normalized() * 4.0, "vel": sd * randf_range(90, 200), "life": 0.22, "max": 0.22, "col": Color("fff1c8") if i % 2 == 0 else col, "size": 1, "line": true})
+	# la lama distrugge i colpi nemici
+	for b in bullets:
+		var tb: Vector2 = b.pos - hero_pos
+		if tb.length() < reach + 6.0 and absf(angle_difference(dir.angle(), tb.angle())) < half + 0.3:
+			b.dead = true
+			_burst(b.pos, Color.WHITE, 4)
+	slashes.append({"ang": dir.angle(), "half": half, "r": reach + 6.0, "life": 0.22, "max": 0.22, "col": col, "flip": flip, "crit": any_crit})
+	recoil = 1.0
+	Sfx.play("sword")
+	if hit_any:
+		hitstop = maxf(hitstop, 0.07 if any_crit else 0.05)
+		shake = maxf(shake, 0.7 if any_crit else 0.45)
+		Sfx.play("slash_hit", 0.06)
+
 func _fire_volley(dir: Vector2, mult: float, sure_crit: bool = false) -> void:
 	var wd := _wdata()
 	var w := _w()
+	if w.key == "sword":
+		_sword_slash(dir, mult, sure_crit)
+		return
 	var col := _shot_color(w)
 	var dmg: float = wd.dmg * _atk_mult() * mult
 	var dirs: Array = []      # [direzione, spostamento laterale]
@@ -636,21 +725,27 @@ func _fire_volley(dir: Vector2, mult: float, sure_crit: bool = false) -> void:
 		shots.append({
 			"pos": hero_pos + d2 * 6 + d2.orthogonal() * d[1], "vel": d2 * wd.speed, "life": wd.range / wd.speed,
 			"dmg": dm * (2.0 if crit else 1.0), "crit": crit, "w": w.key, "slots": w.slots.duplicate(), "size": wd.size,
-			"area": wd.area, "hit": [], "col": col, "pierce": _sk("pierce") > 0, "bounce": 1 if _sk("bounce") > 0 else 0,
+			"area": wd.area, "hit": [], "col": col, "pierce": _sk("pierce") > 0 or (crit and w.key == "bow"), "bounce": 1 if _sk("bounce") > 0 else 0,
 			"chain": _sk("chain"), "kb": {"sword": 150.0, "bow": 70.0, "staff": 55.0}.get(w.key, 60.0),
 		})
 	recoil = 1.0
 	Sfx.play({"sword": "sword", "bow": "bow", "staff": "staff"}.get(w.key, "bow"))
-	# lampo sulla punta dell'arma
-	for i in 4:
-		parts.append({"pos": hero_pos + dir * 11, "vel": dir.rotated(randf_range(-0.8, 0.8)) * randf_range(40, 90), "life": 0.15, "max": 0.15, "col": col.lightened(0.4), "size": 1})
+	if w.key == "bow":
+		# corda che vibra: due scie sottili ai lati
+		for i in 3:
+			parts.append({"pos": hero_pos + dir * 10, "vel": dir.rotated(randf_range(-0.25, 0.25)) * randf_range(120, 200), "life": 0.1, "max": 0.1, "col": Color("fff1c8"), "size": 1, "line": true})
+	else:
+		# bastone: sbuffo di magma
+		rings.append({"pos": hero_pos + dir * 12, "r0": 2.0, "r1": 12.0, "life": 0.16, "max": 0.16, "col": col})
+		for i in 6:
+			parts.append({"pos": hero_pos + dir * 12, "vel": dir.rotated(randf_range(-1.2, 1.2)) * randf_range(30, 80), "life": 0.3, "max": 0.3, "col": col.lightened(0.3), "size": 2})
 
 ## Martelli rotanti e fuocherelli
 func _update_helpers(dt: float) -> void:
 	orb_ang += dt * 3.6
 	var n := _orbit_count()
 	if n > 0:
-		var dmg: float = 0.6 * _wdata().dmg * _atk_mult()
+		var dmg: float = 0.6 * minf(_wdata().dmg, 18.0) * _atk_mult()
 		for i in n:
 			var p := _orbit_pos(i, n)
 			for e in enemies:
@@ -713,10 +808,16 @@ func _update_shots(dt: float) -> void:
 			if e.pos.distance_to(s.pos) < e.size / 2.0 + s.size:
 				s.hit.append(e)
 				_hit_enemy(e, s.dmg, s.slots, s.w != "spirit", s.crit, s.vel.normalized() * s.kb)
-				for i in (5 if s.crit else 3):
-					parts.append({"pos": s.pos, "vel": (-s.vel.normalized()).rotated(randf_range(-1.0, 1.0)) * randf_range(50, 120), "life": 0.18, "max": 0.18, "col": s.col.lightened(0.5) if not s.crit else Color("ffd36b"), "size": 1})
+				if s.w == "bow":
+					# schegge in avanti: la freccia trapassa
+					for i in (6 if s.crit else 4):
+						parts.append({"pos": s.pos, "vel": s.vel.normalized().rotated(randf_range(-0.5, 0.5)) * randf_range(80, 170), "life": 0.16, "max": 0.16, "col": Color("ffd36b") if s.crit else Color("fff1c8"), "size": 1, "line": true})
+					rings.append({"pos": s.pos, "r0": 2.0, "r1": 9.0 if not s.crit else 14.0, "life": 0.14, "max": 0.14, "col": Color("ffd36b") if s.crit else Color.WHITE})
+				else:
+					for i in 3:
+						parts.append({"pos": s.pos, "vel": (-s.vel.normalized()).rotated(randf_range(-1.0, 1.0)) * randf_range(50, 120), "life": 0.18, "max": 0.18, "col": s.col.lightened(0.5), "size": 1})
 				if s.area > 0.0:
-					_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
+					_explode(s.pos, s.area, s.dmg, s.slots, s.col)
 				if s.chain > 0:
 					# salta sul nemico più vicino
 					var n = _nearest_enemy(s.pos, s.hit, 95.0)
@@ -748,14 +849,14 @@ func _update_shots(dt: float) -> void:
 				_burst(s.pos, s.col, 3)
 			elif _in_rock(s.pos):
 				if s.area > 0.0:
-					_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
+					_explode(s.pos, s.area, s.dmg, s.slots, s.col)
 				_burst(s.pos, Color("8a8a96"), 3)
 				done = true
 		if not room.grow(4).has_point(s.pos):
 			done = true
 		if s.life <= 0.0:
 			if s.area > 0.0 and s.hit.is_empty():
-				_explode(s.pos, s.area, s.dmg, s.slots, Color("c78cff"))
+				_explode(s.pos, s.area, s.dmg, s.slots, s.col)
 			done = true
 		if not done:
 			keep.append(s)
@@ -763,9 +864,15 @@ func _update_shots(dt: float) -> void:
 	bullets = bullets.filter(func(b): return not b.get("dead", false))
 
 func _explode(p: Vector2, radius: float, dmg: float, slots: Array, col: Color) -> void:
-	for i in 14:
-		var a := TAU * i / 14.0
-		parts.append({"pos": p, "vel": Vector2(cos(a), sin(a)) * radius * 3.0, "life": 0.25, "max": 0.25, "col": col, "size": 2})
+	rings.append({"pos": p, "r0": radius * 0.2, "r1": radius, "life": 0.3, "max": 0.3, "col": col, "fill": true})
+	rings.append({"pos": p, "r0": radius * 0.5, "r1": radius * 1.25, "life": 0.38, "max": 0.38, "col": col.lightened(0.4)})
+	for i in 16:
+		var a := TAU * i / 16.0 + randf() * 0.3
+		parts.append({"pos": p, "vel": Vector2(cos(a), sin(a)) * radius * randf_range(2.2, 4.0), "life": 0.3, "max": 0.3, "col": col.lightened(0.2), "size": 2, "line": i % 2 == 0})
+	for i in 6:
+		parts.append({"pos": p + Vector2(randf_range(-radius, radius), randf_range(-radius, radius)) * 0.5, "vel": Vector2(randf_range(-10, 10), randf_range(-50, -25)), "life": 0.7, "max": 0.7, "col": Color("ffb347"), "size": 1})
+	shake = maxf(shake, 0.35)
+	Sfx.play("boom", 0.1)
 	for e in enemies:
 		if e.spawn > 0.0 or e.dead_t > 0.0:
 			continue
@@ -896,6 +1003,8 @@ func _kill(e: Dictionary, slots: Array = []) -> void:
 	if _combo(slots) == "ice+thunder" and (e.slow > 0.0 or e.freeze > 0.0):
 		_explode(e.pos, 26.0, 18.0, [], Color("bfefff"))
 	e.dead = true
+	tut_kills += 1
+	_tip_done("attack")
 	Sfx.play("kill", 0.12, 3.0 if e.boss else 0.0)
 	corpses.append({"pos": e.pos, "col": _enemy_color(e), "size": float(e.size), "t": 0.0, "k": e.k})
 	for i in 8:
@@ -962,6 +1071,8 @@ func _drop(kind: String, p: Vector2) -> void:
 #  Nemici
 # ---------------------------------------------------------------------
 func _update_enemies(dt: float) -> void:
+	if gallery:
+		return
 	for e in enemies:
 		e.flash = maxf(0.0, e.flash - dt * 7.0)
 		e.inv = maxf(0.0, e.inv - dt)
@@ -1305,6 +1416,9 @@ func _update_fx(dt: float) -> void:
 	for r in rings:
 		r.life -= dt
 	rings = rings.filter(func(r): return r.life > 0.0)
+	for sl in slashes:
+		sl.life -= dt
+	slashes = slashes.filter(func(sl): return sl.life > 0.0)
 	for c in corpses:
 		c.t += dt
 	corpses = corpses.filter(func(c): return c.t < 0.55)
@@ -1345,6 +1459,7 @@ func _room_cleared() -> void:
 	_make_offers()
 
 func _next_room() -> void:
+	_tip_done("door")
 	room_n += 1
 	fade_t = 0.35
 	volley_q.clear()
@@ -1458,6 +1573,7 @@ func _weighted_pick(w: Dictionary) -> String:
 	return "fire"
 
 func _open_forge() -> void:
+	_tip_done("anvil")
 	state = St.FORGE
 	touch_index = -1
 	hero_vel = Vector2.ZERO
@@ -1485,6 +1601,12 @@ func _ui_action(key: String) -> void:
 		_pick_skill(int(key.substr(5)))
 	elif key == "sound":
 		Sfx.set_enabled(not Save.sound)
+	elif key == "tutorial":
+		Save.tips.clear()
+		Save.save_game()
+		tut_moved = 0.0
+		tut_kills = 0
+		_banner("TUTORIAL RIATTIVATO")
 	elif key == "resume":
 		state = St.PLAY if anvil.is_empty() else St.CLEAR
 		if enemies.is_empty() and wave_idx >= waves.size():
@@ -1625,7 +1747,8 @@ func _draw() -> void:
 		else:
 			_draw_enemy(ac.e)
 	# buio attorno all'eroe, poi tutto quello che fa luce
-	_draw_darkness()
+	if not gallery:
+		_draw_darkness()
 	_draw_lights()
 	for e in enemies:
 		_draw_enemy_telegraph(e)
@@ -1641,11 +1764,22 @@ func _draw() -> void:
 		_draw_bolt(bo.a, bo.b)
 	for rg in rings:
 		var k: float = 1.0 - rg.life / rg.max
-		draw_arc(rg.pos, lerpf(rg.r0, rg.r1, k), 0, TAU, 32, Color(rg.col, (1.0 - k) * 0.8), 2.5 * (1.0 - k) + 0.5, true)
+		var rr := lerpf(rg.r0, rg.r1, k)
+		if rg.get("fill", false):
+			Art.glow(self, rg.pos, rr * 1.6, Color(rg.col, 0.5 * (1.0 - k)))
+			draw_circle(rg.pos, rr, Color(rg.col.lightened(0.5), 0.35 * (1.0 - k)))
+			draw_circle(rg.pos, rr * 0.5 * (1.0 - k), Color(1, 1, 0.9, 0.8 * (1.0 - k)))
+		else:
+			draw_arc(rg.pos, rr, 0, TAU, 32, Color(rg.col, (1.0 - k) * 0.8), 2.5 * (1.0 - k) + 0.5, true)
+	for sl in slashes:
+		_draw_slash(sl)
 	for pt in parts:
 		var c: Color = pt.col
 		c.a = clampf(pt.life / pt.max * 1.5, 0.0, 1.0)
-		draw_circle(pt.pos, pt.size * 0.8, c)
+		if pt.get("line", false):
+			draw_line(pt.pos, pt.pos - pt.vel * 0.035, c, 1.2, true)
+		else:
+			draw_circle(pt.pos, pt.size * 0.8, c)
 	# da qui in poi: coordinate dello schermo
 	draw_set_transform(Vector2.ZERO)
 	for f in floats:
@@ -1695,6 +1829,90 @@ func _draw() -> void:
 		St.PAUSE: _draw_pause()
 		St.LEVEL: _draw_levelup()
 		St.DEAD, St.WIN: _draw_end()
+	_draw_tip()
+
+# ---------------------------------------------------------------------
+#  Tutorial: consigli che compaiono una volta sola, al momento giusto
+# ---------------------------------------------------------------------
+func _tip(id: String, title: String, text: String, target: Dictionary, block: bool) -> void:
+	if autotest or gallery or Coach.seen(id) or not tip.is_empty():
+		return
+	tip = {"id": id, "title": title, "text": text, "block": block}
+	tip.merge(target)
+	tip_t = 0.0
+	if block:
+		touch_index = -1
+
+func _tip_done(id: String) -> void:
+	if tip.get("id", "") == id:
+		Coach.mark(id)
+		tip = {}
+	elif not Coach.seen(id) and tip.is_empty():
+		Coach.mark(id)
+
+func _tutorial_step() -> void:
+	if autotest or gallery or tip.get("block", false):
+		return
+	var cur: String = tip.get("id", "")
+	if cur == "move" and tut_moved > 70.0:
+		_tip_done("move")
+	if cur == "sparks" and drops.is_empty():
+		_tip_done("sparks")
+	if not tip.is_empty():
+		return
+	match state:
+		St.PLAY:
+			if intro_t > 0.0 or boss_card_t > 0.0:
+				return
+			if not Coach.seen("move"):
+				_tip("move", "Muoviti", "Trascina il dito in qualsiasi punto dello schermo per muovere il fabbro.", {}, false)
+			elif not Coach.seen("attack") and not _alive_enemies().is_empty():
+				_tip("attack", "Fermati per colpire", "Quando stai fermo il fabbro attacca da solo il nemico più vicino. Muoviti per schivare, fermati per colpire.", {}, false)
+			elif Coach.seen("attack") and not Coach.seen("weak") and tut_kills > 0:
+				var e = _nearest_enemy(hero_pos)
+				if e != null:
+					_tip("weak", "Debolezze", "Il simbolo sopra ogni nemico è l'elemento che lo ferisce di più: +60% di danni. Alla forgia mettilo nella tua arma.", {"enemy": e}, true)
+			elif Coach.seen("weak") and not Coach.seen("switch") and not _alive_enemies().is_empty():
+				_tip("switch", "Due armi", "Spada: corta ma devastante. Arco: rapido, da lontano. Tocca CAMBIA per passare all'altra: il primo colpo dopo il cambio è sempre critico.", {"ts": _switch_rect().get_center()}, false)
+		St.CLEAR:
+			if not drops.is_empty() and not Coach.seen("sparks"):
+				_tip("sparks", "Scintille", "I nemici lasciano scintille: passaci sopra per raccoglierle. Sono la moneta della forgia.", {}, false)
+			elif drops.is_empty() and not anvil.is_empty() and not anvil_lock and not Coach.seen("anvil"):
+				_tip("anvil", "L'incudine", "Cammina fino all'incudine per forgiare le tue armi con gli elementi.", {"tw": anvil.pos}, false)
+			elif anvil_lock and not Coach.seen("door"):
+				_tip("door", "Avanti", "Esci dal cancello in alto per entrare nella stanza successiva.", {"tw": _door_rect().get_center()}, false)
+		St.FORGE:
+			if not strike.is_empty():
+				return
+			if not Coach.seen("forge"):
+				_tip("forge", "La forgia", "1. Tocca un elemento: costa scintille.\n2. Tocca un incastro vuoto di una delle due armi.\n3. Ferma il martello nell'oro: un colpo perfetto ti rende metà delle scintille.", {"top": true}, true)
+			elif not Coach.seen("slots"):
+				for w in weapons:
+					if w.slots[0] != "" and w.slots[1] != "":
+						_tip("slots", "Gli incastri", "Due elementi uguali danno l'effetto pieno. Due diversi creano una combinazione speciale, se conosci la ricetta: le trovi nel Codice.", {"top": true}, true)
+						break
+		St.LEVEL:
+			if not Coach.seen("level"):
+				_tip("level", "Nuovo livello", "Scegli 1 abilità su 3. Valgono solo per questa partita: l'equipaggiamento invece resta per sempre.", {"top": true}, true)
+
+func _draw_tip() -> void:
+	if tip.is_empty():
+		return
+	var block: bool = tip.get("block", false)
+	if not block and state != St.PLAY and state != St.CLEAR:
+		return
+	var d := tip.duplicate()
+	if tip.has("tw"):
+		d.target = _w2s(tip.tw)
+	elif tip.has("ts"):
+		d.target = tip.ts
+	elif tip.has("enemy"):
+		var e: Dictionary = tip.enemy
+		var rr: float = e.size / 2.0 + 1.0
+		d.target = _w2s(e.pos + Vector2(0, -rr - 14.0))
+	if d.has("target") and d.has("top") and not d.top:
+		d.erase("top")
+	Coach.draw(self, _size(), d, tip_t, HUD_H, _size().y - BAR_H)
 
 ## Buio attorno all'eroe (luce calda che lo segue)
 func _draw_darkness() -> void:
@@ -1778,7 +1996,7 @@ func _draw_boss_card() -> void:
 	var slide := (1.0 - k) * 60.0
 	Art.glow(self, Vector2(s.x / 2.0, y + 20), 120, Color(1, 0.25, 0.15, 0.35 * k))
 	PixelFont.draw_centered(self, "Boss" if boss else "Mini-boss", s.x / 2.0 - slide, y, 2, Color(1, 0.55, 0.45, k), Color(OUT, k))
-	PixelFont.draw_centered(self, "Signore della Cenere" if boss else "Golem antico", s.x / 2.0 + slide, y + 18, 3, Color(1, 1, 1, k), Color(OUT, k))
+	PixelFont.draw_custom(self, "cinzel", "SIGNORE DELLA CENERE" if boss else "GOLEM ANTICO", s.x / 2.0 + slide, y + 18, 22, Color(Art.TEXT, k), Color(Art.INK, k), 4)
 	var sub := "Debolezza nascosta: scoprila colpendolo" if boss else "Debole al Fulmine"
 	PixelFont.draw_centered(self, sub, s.x / 2.0, y + 48, 1, Color(1, 0.85, 0.5, k), Color(OUT, k))
 
@@ -1786,11 +2004,13 @@ func _draw_boss_card() -> void:
 func _draw_intro() -> void:
 	var s := _size()
 	var a := clampf(intro_t * 2.0, 0.0, 1.0) * clampf((2.8 - intro_t) * 4.0, 0.0, 1.0)
-	var r := Rect2(14, s.y * 0.3, s.x - 28, 112)
-	Art.rbox(self, r, Color(0.07, 0.05, 0.14, 0.92 * a), Color(1, 0.75, 0.35, a), 12, 2)
-	PixelFont.draw_centered(self, "Capitolo 1", s.x / 2.0, r.position.y + 10, 2, Color(1, 0.79, 0.29, a), Color(OUT, a))
-	PixelFont.draw_centered(self, "La Fonderia caduta", s.x / 2.0, r.position.y + 28, 3, Color(1, 1, 1, a), Color(OUT, a))
-	_draw_map(Vector2(r.position.x + 14, r.position.y + 76), r.size.x - 28, a)
+	var r := Rect2(14, s.y * 0.3, s.x - 28, 116)
+	Art.glow(self, r.get_center(), 160, Color(1, 0.35, 0.1, 0.25 * a))
+	Art.plate(self, r, Color(0.13, 0.11, 0.15, 0.96 * a), Color(0.05, 0.04, 0.06, 0.96 * a), Color(Art.GOLD, a), 8.0, true)
+	PixelFont.draw_centered(self, "Capitolo 1", s.x / 2.0, r.position.y + 12, 1, Color(Art.GOLD_L, a))
+	PixelFont.draw_custom(self, "cinzel", "LA FONDERIA CADUTA", s.x / 2.0, r.position.y + 28, 20, Color(Art.TEXT, a), Color(Art.INK, a), 4)
+	draw_line(Vector2(r.position.x + 30, r.position.y + 60), Vector2(r.end.x - 30, r.position.y + 60), Color(Art.GOLD, 0.4 * a), 1.0)
+	_draw_map(Vector2(r.position.x + 16, r.position.y + 84), r.size.x - 32, a)
 
 func _draw_map(pos: Vector2, w: float, a: float = 1.0) -> void:
 	var n := Data.ROOMS
@@ -2391,19 +2611,8 @@ func _draw_enemy(e: Dictionary) -> void:
 		return
 	var moving: bool = e.vel.length() > 3.0
 	var bob: float = absf(sin(time * 9.0 + c.x)) * -2.0 if moving else sin(time * 4.0 + c.x) * 0.8
-	var squash: float = 1.0 + sin(time * 7.0 + c.y) * 0.05 - e.flash * 0.18
 	var bc := c + Vector2(0, bob)
-	# piedi che camminano
-	if e.k in ["zombie", "archer", "golem", "miniboss"]:
-		var fc := col.darkened(0.55)
-		var stp: float = sin(time * 12.0 + c.x) * (r * 0.22 if moving else 0.0)
-		for sx in [-1.0, 1.0]:
-			var fp := c + Vector2(sx * r * 0.42, r * 0.8 + stp * sx)
-			HeroArt.ellipse(self, fp, r * 0.3 + 1.2, r * 0.2 + 1.2, OUT)
-			HeroArt.ellipse(self, fp, r * 0.3, r * 0.2, fc)
-	_draw_enemy_body(e, bc, r, col, look)
-	if e.flash > 0.0:
-		HeroArt.ellipse(self, bc, r * 1.05, r * 1.1, Color(1, 1, 1, minf(0.85, e.flash)))
+	EnemyArt.draw(self, e, bc, r * 1.25, time, look, moving)
 	# stati
 	if e.slow > 0.0 or e.freeze > 0.0:
 		if e.freeze > 0.0:
@@ -2449,44 +2658,79 @@ func _draw_hero() -> void:
 	Art.bar(self, Rect2(p.x - bw / 2.0, by, bw, 3.5), hk, hcol)
 	PixelFont.draw_centered(self, str(hero_hp), p.x, by - 11, 1, Art.TEXT, OUT)
 
+## Mezzaluna del fendente: si apre velocemente e poi svanisce
+func _draw_slash(sl: Dictionary) -> void:
+	var k: float = 1.0 - sl.life / sl.max
+	var open := minf(1.0, k / 0.35)
+	var fade := 1.0 - maxf(0.0, (k - 0.35) / 0.65)
+	var half: float = sl.half
+	var r: float = sl.r * (0.9 + 0.12 * k)
+	var a0: float = sl.ang - half * sl.flip
+	var span: float = 2.0 * half * open * sl.flip
+	var n := 18
+	var outer := PackedVector2Array()
+	var inner := PackedVector2Array()
+	for i in n + 1:
+		var t := float(i) / n
+		var a := a0 + span * t
+		var thick := sin(t * PI) * 0.55 * (0.6 + 0.4 * t)
+		outer.append(hero_pos + Vector2.from_angle(a) * r)
+		inner.append(hero_pos + Vector2.from_angle(a) * r * (1.0 - thick))
+	var poly := outer.duplicate()
+	for i in range(n, -1, -1):
+		poly.append(inner[i])
+	var col: Color = sl.col
+	var edge := Color("ffd36b") if sl.crit else Color.WHITE
+	Art.glow(self, hero_pos + Vector2.from_angle(sl.ang) * r * 0.8, r * 0.9, Color(col, 0.35 * fade))
+	if poly.size() >= 3:
+		var cols := PackedColorArray()
+		for i in n + 1:
+			cols.append(Color(edge, 0.95 * fade))
+		for i in n + 1:
+			cols.append(Color(col, 0.15 * fade))
+		draw_polygon(poly, cols)
+	draw_polyline(outer, Color(edge, fade), 2.0, true)
+	# punta luminosa della lama
+	var tip := outer[n]
+	draw_circle(tip, 2.5 * fade, Color(1, 1, 1, fade))
+
 func _draw_shot(s: Dictionary) -> void:
 	var col: Color = s.col
 	var dir: Vector2 = s.vel.normalized()
-	if s.w != "sword":
-		# scia luminosa
-		var tl: float = minf(s.vel.length() * 0.06, 18.0)
-		draw_line(s.pos - dir * tl, s.pos, Color(col, 0.0), s.size * 1.4, true)
-		for i in 3:
-			var k := (i + 1) / 3.0
-			draw_line(s.pos - dir * tl * k, s.pos - dir * tl * (k - 0.34), Color(col, 0.45 * (1.0 - k) + 0.1), maxf(1.0, s.size * (1.6 - k)), true)
+	var o := dir.orthogonal()
 	match s.w:
-		"sword":
-			var a := dir.angle()
-			Art.glow(self, s.pos, 12, Color(col, 0.45))
-			var pts := PackedVector2Array()
-			for i in 9:
-				var t := -1.1 + 2.2 * i / 8.0
-				pts.append(s.pos + Vector2.from_angle(a + t) * 9.0)
-			for i in range(8, -1, -1):
-				var t := -1.0 + 2.0 * i / 8.0
-				pts.append(s.pos - dir * 3 + Vector2.from_angle(a + t) * 6.0)
-			draw_colored_polygon(pts, Color(col.lightened(0.3), 0.9))
-			draw_arc(s.pos, 9.0, a - 1.0, a + 1.0, 10, Color.WHITE, 1.2, true)
 		"bow":
-			Art.glow(self, s.pos, 7, Color(col, 0.5))
-			draw_line(s.pos - dir * 9, s.pos, OUT, 3.0, true)
-			draw_line(s.pos - dir * 9, s.pos, Color("c8a070"), 1.5, true)
-			_poly([s.pos + dir * 3, s.pos - dir * 1 + dir.orthogonal() * 2.5, s.pos - dir * 1 - dir.orthogonal() * 2.5], col)
+			# scia lunga e sottile: la freccia è velocissima
+			draw_line(s.pos - dir * 26, s.pos - dir * 6, Color(col.lightened(0.4), 0.0), 2.0, true)
+			draw_line(s.pos - dir * 18, s.pos - dir * 6, Color(col.lightened(0.4), 0.35), 1.5, true)
+			if s.crit:
+				Art.glow(self, s.pos, 10, Color(1, 0.8, 0.3, 0.6))
+			draw_line(s.pos - dir * 11, s.pos + dir * 2, OUT, 3.2, true)
+			draw_line(s.pos - dir * 11, s.pos + dir * 2, Color("b08858"), 1.6, true)
+			# impennaggio
+			_poly([s.pos - dir * 8, s.pos - dir * 12 + o * 2.8, s.pos - dir * 13], Color("d8343e"))
+			_poly([s.pos - dir * 8, s.pos - dir * 12 - o * 2.8, s.pos - dir * 13], Color("a82830"))
+			# punta d'acciaio (colorata se incantata)
+			_poly([s.pos + dir * 5, s.pos + o * 2.4, s.pos - o * 2.4], OUT)
+			_poly([s.pos + dir * 4, s.pos + o * 1.6, s.pos - o * 1.6], col if col != Color("c8a070") else Color("e8ecf8"))
 		"spirit":
 			Art.glow(self, s.pos, 9, Color(1, 0.5, 0.15, 0.6))
 			draw_circle(s.pos, 3.5, OUT)
 			draw_circle(s.pos, 2.6, Color("ffb03a"))
 			draw_circle(s.pos - dir * 3, 1.6, Color(1, 0.6, 0.2, 0.6))
 		"staff":
-			Art.glow(self, s.pos, 14, Color(col, 0.6))
-			draw_circle(s.pos, s.size + 1.5, OUT)
-			draw_circle(s.pos, s.size, col)
-			draw_circle(s.pos - Vector2(1.5, 1.5), 1.8, Color(1, 1, 1, 0.9))
+			# sfera di magma con braci che le girano attorno
+			for i in 4:
+				var tp: Vector2 = s.pos - dir * (4.0 + i * 4.0) + o * sin(time * 18.0 + i * 1.7) * 2.5
+				draw_circle(tp, 3.2 - i * 0.6, Color(col, 0.5 - i * 0.1))
+			Art.glow(self, s.pos, 18, Color(col, 0.65))
+			draw_circle(s.pos, s.size + 2.0, OUT)
+			draw_circle(s.pos, s.size + 0.8, col.darkened(0.3))
+			draw_circle(s.pos, s.size * 0.75, col.lightened(0.35))
+			draw_circle(s.pos, s.size * 0.35, Color(1, 1, 0.85))
+			for i in 3:
+				var ma := time * 9.0 + i * TAU / 3.0
+				draw_circle(s.pos + Vector2.from_angle(ma) * (s.size + 4.0), 1.2, Color(1, 0.85, 0.5, 0.9))
 
 func _draw_bolt(a: Vector2, b: Vector2) -> void:
 	var col: Color = Data.EL_COLOR.thunder
@@ -2606,10 +2850,7 @@ func _draw_banner() -> void:
 		PixelFont.draw_centered(self, t, 0, -8, 2, Color(1, 1, 1, a), Color(OUT, a))
 		draw_set_transform(Vector2.ZERO)
 	var by := s.y - BAR_H
-	if room_n == 1 and time < 9.0 and time > 2.8 and state == St.PLAY:
-		PixelFont.draw_centered(self, "Trascina per muoverti", s.x / 2.0, by - 50, 2, Color.WHITE, OUT)
-		PixelFont.draw_centered(self, "Fermati per attaccare", s.x / 2.0, by - 32, 2, Color("ffd36b"), OUT)
-	if state == St.CLEAR and not anvil.is_empty() and not anvil_lock and room_n <= 2:
+	if state == St.CLEAR and not anvil.is_empty() and not anvil_lock and room_n <= 2 and tip.is_empty():
 		PixelFont.draw_centered(self, "Vai all'incudine o esci dal cancello", s.x / 2.0, by - 22, 1, Color.WHITE, OUT)
 
 ## Carta in stile Braceforte 2
@@ -2792,13 +3033,16 @@ func _draw_pause() -> void:
 	y += 58
 	var r1 := Rect2(s.x / 2.0 - 84, y, 168, 40)
 	var r2 := Rect2(s.x / 2.0 - 84, y + 50, 168, 30)
-	var sr := Rect2(s.x / 2.0 - 84, y + 88, 168, 26)
+	var sr := Rect2(s.x / 2.0 - 84, y + 88, 82, 26)
+	var tr := Rect2(s.x / 2.0 + 2, y + 88, 82, 26)
 	ui_rects["resume"] = r1
 	ui_rects["quit"] = r2
 	ui_rects["sound"] = sr
+	ui_rects["tutorial"] = tr
+	Art.button(self, tr, "Tutorial", Art.IRON_L, true, 1)
 	Art.button(self, r1, "Riprendi", Art.MOLTEN, true, 2)
 	Art.button(self, r2, "Abbandona", Art.STEEL, true, 1)
-	Art.button(self, sr, "Suoni: sì" if Save.sound else "Suoni: no", Color("3d8a5a") if Save.sound else Art.IRON_L, true, 1)
+	Art.button(self, sr, "Suoni sì" if Save.sound else "Suoni no", Color("3d8a5a") if Save.sound else Art.IRON_L, true, 1)
 	PixelFont.draw_centered(self, "Abbandonando tieni una parte del bottino", s.x / 2.0, sr.end.y + 10, 1, Art.TEXT_DIM)
 
 func _draw_end() -> void:

@@ -2,7 +2,7 @@ extends Node2D
 ## Schermata iniziale: la fonderia in rovina, il Fabbro davanti all'incudine,
 ## un fiume di metallo fuso. Tocca per entrare.
 
-const VERSION_TEXT := "v2.0"
+const VERSION_TEXT := "v2.1"
 
 var embers: Array = []
 var sparks: Array = []

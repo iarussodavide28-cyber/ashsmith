@@ -161,6 +161,13 @@ func _build_sfx() -> void:
 	_reg("bow", b, -10.0)
 	b = _buf(0.2); _add(b, 0, 0.16, 900, 3800, "noise", 0.7, 0.03, 2.0); _ring(b, int(0.02 * RATE), 0.16, 1900, 0.08, 4.0)
 	_reg("sword", b, -9.0)
+	# fendente che va a segno: colpo pesante e lama che vibra
+	b = _buf(0.32); _add(b, 0, 0.14, 140, 40, "sine", 1.0, 0.001, 2.0); _add(b, 0, 0.08, 3000, 700, "noise", 0.6, 0.001, 2.5); _ring(b, 0, 0.28, 1320, 0.12, 4.0)
+	_reg("slash_hit", b, -5.0)
+	# esplosione della sfera di magma
+	b = _buf(0.5); _add(b, 0, 0.45, 900, 90, "noise", 0.8, 0.002, 1.8); _add(b, 0, 0.35, 110, 35, "sine", 0.8, 0.002, 2.0)
+	_lowpass(b, 0.45)
+	_reg("boom", b, -8.0)
 	b = _buf(0.3); _add(b, 0, 0.26, 260, 70, "sine", 0.7, 0.004, 2.0); _add(b, 0, 0.18, 1200, 200, "noise", 0.3, 0.01, 2.0)
 	_reg("staff", b, -8.0)
 	# colpi

@@ -19,6 +19,7 @@ var shop_bought: Array = []    # offerte del giorno già comprate
 var gift_day := ""             # giorno dell'ultimo regalo gratis
 var sound := true              # suoni e musica
 var talents := {}              # talento -> livello
+var tips: Array = []           # consigli del tutorial già visti
 
 func _ready() -> void:
 	load_game()
@@ -53,6 +54,9 @@ func load_game() -> void:
 	wins = int(d.get("wins", 0))
 	sound = bool(d.get("sound", true))
 	talents = {}
+	tips = []
+	for x in d.get("tips", []):
+		tips.append(str(x))
 	var tl = d.get("talents", {})
 	if typeof(tl) == TYPE_DICTIONARY:
 		for k in tl:
@@ -85,7 +89,7 @@ func save_game() -> void:
 	if f == null:
 		return
 	f.store_string(JSON.stringify({
-		"version": VERSION, "sound": sound, "talents": talents, "gold": gold, "gems": gems, "best_room": best_room,
+		"version": VERSION, "sound": sound, "talents": talents, "tips": tips, "gold": gold, "gems": gems, "best_room": best_room,
 		"runs": runs, "wins": wins, "materials": materials, "items": items,
 		"equipped": equipped, "recipes": recipes, "uid": uid,
 		"shop_day": shop_day, "shop_bought": shop_bought, "gift_day": gift_day,

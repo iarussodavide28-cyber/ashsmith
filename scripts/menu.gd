@@ -41,6 +41,17 @@ var press_pos := Vector2.ZERO
 var press_scroll := 0.0
 var dragging := false
 var touching := false
+var mtip := {}                # consiglio del tutorial nel menu
+var mtip_t := 0.0
+var swallow := false
+
+const MENU_TIPS := {
+	"battle": ["Benvenuto, Fabbro", "Questa è la tua base. Tocca COMBATTI per entrare nella Fonderia caduta: 12 stanze, un mini-boss e il Signore della Cenere."],
+	"armory": ["Armeria", "Tocca un pezzo dell'inventario per equipaggiarlo o potenziarlo con oro e materiali. L'equipaggiamento resta per sempre."],
+	"shop": ["Mercato", "Ritira il regalo ogni giorno e apri le casse per trovare equipaggiamento nuovo e più raro."],
+	"talents": ["Talenti", "Spendi oro per potenziamenti permanenti: valgono in ogni partita."],
+	"codex": ["Codice della forgia", "Due elementi diversi nella stessa arma creano un effetto speciale: qui trovi le ricette. Sotto, la debolezza di ogni famiglia di nemici."],
+}
 
 func _ready() -> void:
 	Sfx.music_on()
@@ -57,6 +68,12 @@ func _process(delta: float) -> void:
 	toast_t -= delta
 	reveal_t += delta
 	tab_anim = minf(1.0, tab_anim + delta * 5.0)
+	mtip_t += delta
+	if mtip.is_empty() and not _overlay_open() and tab_anim >= 1.0 and not Coach.seen("m_" + tab) and MENU_TIPS.has(tab):
+		mtip = {"id": "m_" + tab, "title": MENU_TIPS[tab][0], "text": MENU_TIPS[tab][1], "block": true}
+		if tab == "battle" and rects.has("play"):
+			mtip.target = (rects["play"] as Rect2).get_center()
+		mtip_t = 0.0
 	queue_redraw()
 
 func _size() -> Vector2:
@@ -75,6 +92,16 @@ func _toast(t: String) -> void:
 # =====================================================================
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
+		if not mtip.is_empty():
+			if event.pressed and mtip_t > 0.4:
+				Coach.mark(str(mtip.id))
+				mtip = {}
+				swallow = true
+			return
+		if swallow:
+			if not event.pressed:
+				swallow = false
+			return
 		if event.pressed:
 			touching = true
 			dragging = false
@@ -300,6 +327,8 @@ func _draw() -> void:
 		draw_colored_polygon(pts, Color(0.05, 0.04, 0.06, 0.92 * a))
 		Art.outline(self, pts, Color(Art.GOLD, a), 1.0)
 		PixelFont.draw_centered(self, toast, s.x / 2.0, y, 1, Color(Art.GOLD_L, a))
+	if not mtip.is_empty():
+		Coach.draw(self, s, mtip, mtip_t, TOP_H, s.y - NAV_H)
 
 func _draw_top() -> void:
 	var s := _size()
